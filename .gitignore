@@ -1,0 +1,9 @@
+# Rust build artifacts
+target/
+
+# Local Agent OOO session outputs
+.agent-ooo/
+
+# OS artifacts
+.DS_Store
+Thumbs.db

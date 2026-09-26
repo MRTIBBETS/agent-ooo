@@ -1,0 +1,27 @@
+[package]
+name = "agent-ooo"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Spa retreats for your AI. Reset, refresh, relax."
+
+[lib]
+name = "agent_ooo_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "agent-ooo"
+path = "src/bin/agent-ooo.rs"
+
+[[bin]]
+name = "ooo"
+path = "src/bin/ooo.rs"
+
+[dependencies]
+agent-ooo-core = { path = "../core" }
+clap.workspace = true
+anyhow.workspace = true
+colored.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
