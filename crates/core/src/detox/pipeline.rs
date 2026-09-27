@@ -67,13 +67,15 @@ pub fn execute_detox(
             // Also check tool call payloads if they are embedded differently
             if let Some(tool_responses) = value.get_mut("tool_responses").and_then(|v| v.as_array_mut()) {
                 for resp in tool_responses {
-                    if let Some(output) = resp.get_mut("output").and_then(|v| v.as_str()) {
-                        let (sanitized_str, red_count) = sanitize_content(output);
-                        receipt.redactions_count += red_count;
+                    if let Some(output_val) = resp.get_mut("output") {
+                        if let Some(output_str) = output_val.as_str() {
+                            let (sanitized_str, red_count) = sanitize_content(output_str);
+                            receipt.redactions_count += red_count;
 
-                        if let Ok((final_str, spilled)) = manage_spillover(&sanitized_str, workspace_dir) {
-                            if spilled { receipt.spilled_payloads_count += 1; }
-                            *resp.get_mut("output").unwrap() = Value::String(final_str);
+                            if let Ok((final_str, spilled)) = manage_spillover(&sanitized_str, workspace_dir) {
+                                if spilled { receipt.spilled_payloads_count += 1; }
+                                *output_val = Value::String(final_str);
+                            }
                         }
                     }
                 }
