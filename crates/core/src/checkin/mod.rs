@@ -1,5 +1,9 @@
 //! Step 1: Checkin (Intake, Discovery & Triage)
 
+pub mod discovery;
+pub mod parser;
+pub mod triage;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

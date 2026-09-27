@@ -1,5 +1,9 @@
 //! Step 4: Discharge (Clinical Canary Verification & Spa Report)
 
+pub mod canary;
+pub mod pipeline;
+pub mod report;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

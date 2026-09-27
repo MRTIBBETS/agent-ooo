@@ -1,5 +1,10 @@
 //! Step 2: Detox (Syntactic Cleanse & Bloat Eviction)
 
+pub mod arena;
+pub mod pipeline;
+pub mod sanitizer;
+pub mod spillover;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
