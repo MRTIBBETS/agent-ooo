@@ -20,12 +20,40 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    Checkin { transcript: Option<String> },
-    Detox { transcript: Option<String> },
-    Reset { transcript: Option<String> },
-    Discharge { transcript: Option<String> },
-    Spa { transcript: Option<String> },
+    /// Run the full 4-step retreat (Checkin, Detox, Reset, Discharge).
+    #[command(display_order = 1)]
+    Spa {
+        /// Optional path to a specific transcript file (.jsonl)
+        transcript: Option<String>,
+    },
+    /// Step 1: Parse transcripts and diagnose context rot.
+    #[command(display_order = 2)]
+    Checkin {
+        /// Optional path to a specific transcript file (.jsonl)
+        transcript: Option<String>,
+    },
+    /// Step 2: Strip ANSI noise, mask secrets, and offload massive payloads.
+    #[command(display_order = 3)]
+    Detox {
+        /// Optional path to a specific transcript file (.jsonl)
+        transcript: Option<String>,
+    },
+    /// Step 3: Sever error loops and write zero-copy checkpoints.
+    #[command(display_order = 4)]
+    Reset {
+        /// Optional path to a specific transcript file (.jsonl)
+        transcript: Option<String>,
+    },
+    /// Step 4: Verify health and generate the Spa Report.
+    #[command(display_order = 5)]
+    Discharge {
+        /// Optional path to a specific transcript file (.jsonl)
+        transcript: Option<String>,
+    },
+    /// Background watchdog monitoring active sessions.
+    #[command(display_order = 6)]
     Watch {
+        /// Polling interval in seconds
         #[arg(short, long, default_value_t = 10)]
         interval: u64,
     },
@@ -61,11 +89,8 @@ pub fn run() -> anyhow::Result<()> {
             let receipt = reset_pipeline::execute_reset(&session_id, &current_dir, &arena)?;
             println!("Checkpoint size: {} bytes", receipt.checkpoint_capnp_bytes);
         }
-        Some(Commands::Discharge { transcript: _ }) => {
+        Some(Commands::Discharge { transcript }) => {
             println!("{} Clinical verification initiated...", "[DISCHARGE]".bold().magenta());
-            // Discharge requires the previous steps to exist. We'll run them purely to get receipts for testing, 
-            // but normally it reads the checkpoint. 
-            // We just implement it as part of 'Spa' for full end-to-end.
             println!("Please use `agent-ooo spa` to run the full pipeline.");
         }
         Some(Commands::Spa { transcript }) => {

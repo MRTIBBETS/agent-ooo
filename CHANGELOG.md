@@ -52,3 +52,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Pre-Commit Self-Review Executed:**
   - *Memory Safety & Panics:* Refactored `crates/core/src/detox/pipeline.rs` to replace `.unwrap()` on mutable JSON tool response payloads with safe reference rebinding, preventing potential panics on malformed transcripts.
   - *Context:* Authored by Antigravity (Gemini).
+
+## [0.1.2] - 2026-09-26
+
+### Changed
+- **CLI Ergonomics & UX Polish:**
+  - Reordered the `clap` help menu to elevate `agent-ooo spa` as the primary entry point (display order 1), followed by the individual steps.
+  - Refined one-liner descriptions for all commands for punchier readability.
+  - Added visual "breathing room" (`\n\n`) before the plain-text banner to reduce terminal clutter.
+  - Upgraded the transcript discovery engine (`discovery.rs`) to use `dialoguer`. When multiple active sessions are found across Antigravity, Claude, or Cursor, it now presents a beautiful, interactive arrow-key selection menu with "last active" timestamps instead of silently guessing.
+  - *Context:* Authored by Antigravity (Gemini).

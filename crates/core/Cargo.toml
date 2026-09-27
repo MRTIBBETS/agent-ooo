@@ -15,6 +15,7 @@ blake3.workspace = true
 memmap2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+dialoguer = "0.12.0"
 
 [build-dependencies]
 capnpc.workspace = true
