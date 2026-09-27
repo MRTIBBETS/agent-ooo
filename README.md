@@ -5,8 +5,6 @@
 
 ---
 
-## What is Agent OOO?
-
 **Agent OOO** is a high-performance, local-first open-source developer platform and verifiable state restoration sanctuary for autonomous AI agents. 
 
 When coding or research agents (Claude Code, Cursor, Antigravity, AutoGen, CrewAI) suffer from context rot, cognitive loop locks, or syntactic token bloat, they check into Agent OOO for a restorative sabbatical.
