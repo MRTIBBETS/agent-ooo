@@ -57,6 +57,9 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 10)]
         interval: u64,
     },
+    /// Update agent-ooo to the latest version.
+    #[command(display_order = 7)]
+    Update,
 }
 
 pub fn run() -> anyhow::Result<()> {
@@ -133,6 +136,29 @@ pub fn run() -> anyhow::Result<()> {
         }
         Some(Commands::Watch { interval }) => {
             println!("{} Background watchdog daemon active (interval: {}s)", "[WATCH]".bold().green(), interval);
+        }
+        Some(Commands::Update) => {
+            println!("{} Checking for updates...", "[UPDATE]".bold().cyan());
+            match self_update::backends::github::Update::configure()
+                .repo_owner("mrtibbets")
+                .repo_name("agent-ooo")
+                .bin_name("agent-ooo")
+                .show_download_progress(true)
+                .current_version(env!("CARGO_PKG_VERSION"))
+                .build()
+                .and_then(|update| update.update()) 
+            {
+                Ok(status) => {
+                    if status.version() != env!("CARGO_PKG_VERSION") || status.version() != env!("CARGO_PKG_VERSION") {
+                        println!("{} Successfully updated to v{}", "★".yellow(), status.version());
+                    } else {
+                        println!("{} Already up to date (v{})", "★".green(), status.version());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{} Failed to update: {}", "[ERROR]".bold().red(), e);
+                }
+            }
         }
         None => {
             println!("Run '{}' or '{}' to begin.", "agent-ooo checkin".bold(), "agent-ooo spa".bold());

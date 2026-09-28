@@ -72,3 +72,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   - Injects Homebrew and APT dependencies for `capnproto` prior to the Cargo build layer.
   - Bundles the binaries, `README.md`, and `CHANGELOG.md` into `.tar.gz` archives and automatically attaches them to GitHub Releases.
   - *Context:* Authored by Antigravity (Gemini).
+
+## [0.1.4] - 2026-09-28
+
+### Added
+- **Built-in `update` Command:**
+  - Integrated the `self_update` crate with `rustls` (avoiding OpenSSL dependencies).
+  - The CLI can now pull the latest pre-compiled binaries natively via `agent-ooo update`.
+- **Public `README.md` Polish:**
+  - Rewrote the main repository README to document the 4-step Spa architecture, the zero-copy performance guarantees, and the new `update` command.
+  - *Context:* Authored by Antigravity (Gemini).
