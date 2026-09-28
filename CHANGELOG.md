@@ -62,3 +62,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   - Added visual "breathing room" (`\n\n`) before the plain-text banner to reduce terminal clutter.
   - Upgraded the transcript discovery engine (`discovery.rs`) to use `dialoguer`. When multiple active sessions are found across Antigravity, Claude, or Cursor, it now presents a beautiful, interactive arrow-key selection menu with "last active" timestamps instead of silently guessing.
   - *Context:* Authored by Antigravity (Gemini).
+
+## [0.1.3] - 2026-09-28
+
+### Added
+- **GitHub Actions CI/CD Pipeline:**
+  - Engineered `.github/workflows/release.yml` to automate cross-compilation and artifact generation.
+  - Automatically compiles `agent-ooo` and `ooo` release binaries for macOS (Apple Silicon `aarch64-apple-darwin`) and Linux (`x86_64-unknown-linux-gnu`) whenever a version tag (e.g., `v0.1.3`) is pushed.
+  - Injects Homebrew and APT dependencies for `capnproto` prior to the Cargo build layer.
+  - Bundles the binaries, `README.md`, and `CHANGELOG.md` into `.tar.gz` archives and automatically attaches them to GitHub Releases.
+  - *Context:* Authored by Antigravity (Gemini).
