@@ -44,12 +44,7 @@ Before you declare a feature complete or attempt to log a milestone, you must ex
 
 ---
 
-## 4. LLM Discovery File Protocol (`llms.txt`)
-
-The repository contains an `llms.txt` file at the root. This acts as the standard API for visiting web-crawling LLMs. 
-If you add a new feature, change the directory structure, or alter the core architecture, you **must** update `llms.txt` in tandem with `README.md` to guarantee incoming agents have accurate context.
-
-## 5. Milestone and Changelog Protocol
+## 4. Milestone and Changelog Protocol
 
 This repository maintains a pristine, highly detailed [CHANGELOG.md](CHANGELOG.md) based on "Keep a Changelog" standards. 
 

@@ -13,6 +13,7 @@ pub fn generate_spa_report(
     detox: &DetoxReceipt,
     reset: &ResetReceipt,
     canaries_passed: bool,
+    execution_time_ms: f64,
 ) -> Result<DischargeCertificate, crate::OooError> {
     let agent_ooo_dir = base_dir.join(".agent-ooo");
     std::fs::create_dir_all(&agent_ooo_dir)?;
@@ -37,6 +38,7 @@ pub fn generate_spa_report(
         developer_hours_saved,
         net_savings_usd,
         spa_report_path: agent_ooo_dir.join("spa_report.md").to_string_lossy().to_string(),
+        execution_time_ms,
     };
 
     let md_content = format!(
@@ -67,6 +69,7 @@ status: {status}
 * **Token Reduction:** {reduction:.2}%
 * **Net Cost Savings:** ${savings:.4}
 * **Developer Triage Time Saved:** {hours:.1} hours
+* **Execution Telemetry:** {telemetry:.2} ms
 
 > "Reset, refresh, relax."
 "#,
@@ -83,6 +86,7 @@ status: {status}
         reduction = token_reduction_percentage,
         savings = net_savings_usd,
         hours = developer_hours_saved,
+        telemetry = execution_time_ms,
     );
 
     let md_path = agent_ooo_dir.join("spa_report.md");

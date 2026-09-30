@@ -51,7 +51,7 @@ pub fn write_checkpoints(
     // Modified Files
     let mut r4 = reg_list.reborrow().get(3);
     r4.set_key("modified_files");
-    r4.set_value(&registers.modified_files.join(","));
+    r4.set_value(registers.modified_files.join(","));
     r4.set_origin(crate::schema::TrustOrigin::System);
 
     // Evicted info placeholder (from arena size logic)

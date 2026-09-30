@@ -13,4 +13,5 @@ pub struct DischargeCertificate {
     pub developer_hours_saved: f64,
     pub net_savings_usd: f64,
     pub spa_report_path: String,
+    pub execution_time_ms: f64,
 }

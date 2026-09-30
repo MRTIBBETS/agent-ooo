@@ -7,6 +7,7 @@ use agent_ooo_core::detox::pipeline as detox_pipeline;
 use agent_ooo_core::reset::pipeline as reset_pipeline;
 use agent_ooo_core::discharge::pipeline as discharge_pipeline;
 use std::env;
+use std::time::Instant;
 
 #[derive(Parser)]
 #[command(name = "agent-ooo")]
@@ -92,13 +93,14 @@ pub fn run() -> anyhow::Result<()> {
             let receipt = reset_pipeline::execute_reset(&session_id, &current_dir, &arena)?;
             println!("Checkpoint size: {} bytes", receipt.checkpoint_capnp_bytes);
         }
-        Some(Commands::Discharge { transcript }) => {
+        Some(Commands::Discharge { transcript: _ }) => {
             println!("{} Clinical verification initiated...", "[DISCHARGE]".bold().magenta());
             println!("Please use `agent-ooo spa` to run the full pipeline.");
         }
         Some(Commands::Spa { transcript }) => {
             println!("{} Starting The Spa Package (Steps 1 -> 4)...", "[SPA PACKAGE]".bold().cyan());
             
+            let start_time = Instant::now();
             let path = discovery::resolve_transcript_path(transcript.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
             println!("{} Discovered transcript: {}", "->".cyan(), path.display());
             
@@ -123,10 +125,12 @@ pub fn run() -> anyhow::Result<()> {
 
             // 4. Discharge
             println!("\n{} Step 4: Verification & Discharge...", "=>".magenta());
-            let cert = discharge_pipeline::execute_discharge(&current_dir, &triage_receipt, &detox_receipt, &reset_receipt)?;
+            let mut cert = discharge_pipeline::execute_discharge(&current_dir, &triage_receipt, &detox_receipt, &reset_receipt)?;
             
             println!("\n{}", "=============================================".bold().cyan());
             println!("{} Spa Retreat Complete!", "★".yellow());
+            cert.execution_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+            println!("* Execution Time: {:.2} ms", cert.execution_time_ms);
             println!("* Canary Verification: {}", if cert.canaries_passed { "PASS".green() } else { "FAIL".red() });
             println!("* Token Footprint Reduction: {:.2}%", cert.token_reduction_percentage);
             println!("* Estimated Savings: ${:.4}", cert.net_savings_usd);

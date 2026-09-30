@@ -82,3 +82,37 @@ jobs:
         with:
           files: artifacts/**/*.tar.gz
           generate_release_notes: true
+
+  update-homebrew:
+    name: Update Homebrew Formula
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main # We want to commit back to the main branch
+          
+      - name: Update Formula
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          MAC_SHA=$(curl -sL https://github.com/mrtibbets/agent-ooo/releases/download/${GITHUB_REF_NAME}/agent-ooo-macos-aarch64.tar.gz | shasum -a 256 | awk '{print $1}')
+          LINUX_SHA=$(curl -sL https://github.com/mrtibbets/agent-ooo/releases/download/${GITHUB_REF_NAME}/agent-ooo-linux-x86_64.tar.gz | shasum -a 256 | awk '{print $1}')
+          
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" Formula/agent-ooo.rb
+          
+          # Update Mac SHA
+          sed -i "/on_macos do/,/end/ s/sha256 \".*\"/sha256 \"${MAC_SHA}\"/" Formula/agent-ooo.rb
+          sed -i "/on_macos do/,/end/ s|url \".*\"|url \"https://github.com/mrtibbets/agent-ooo/releases/download/${GITHUB_REF_NAME}/agent-ooo-macos-aarch64.tar.gz\"|" Formula/agent-ooo.rb
+          
+          # Update Linux SHA
+          sed -i "/on_linux do/,/end/ s/sha256 \".*\"/sha256 \"${LINUX_SHA}\"/" Formula/agent-ooo.rb
+          sed -i "/on_linux do/,/end/ s|url \".*\"|url \"https://github.com/mrtibbets/agent-ooo/releases/download/${GITHUB_REF_NAME}/agent-ooo-linux-x86_64.tar.gz\"|" Formula/agent-ooo.rb
+          
+      - name: Commit and Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/agent-ooo.rb
+          git commit -m "chore: auto-update Homebrew formula for ${GITHUB_REF_NAME}" || echo "No changes to commit"
+          git push origin main

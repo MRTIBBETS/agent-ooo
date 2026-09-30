@@ -1,0 +1,25 @@
+# Agent OOO
+
+> Spa retreats for your AI. Reset, refresh, relax.
+
+Agent OOO is a high-performance, zero-copy Rust engine that treats context rot in autonomous AI agents. By running Agent OOO between tasks, agents surgically strip out ANSI noise, mask API keys, offload massive payloads, and sever recursive error loops.
+
+## Architecture and Core Principles
+
+* **Zero-Copy Parsing:** Uses Cap'n Proto (`capnp`) for state definition, ensuring constant-memory bounds and instant serialization.
+* **Bounded Allocations:** Transcripts are processed as streams; massive payloads (>512KB) are intercepted and spilled to disk via Blake3 content-addressed storage (CAS) rather than held in RAM.
+* **Deterministic Normalization:** Uses compiled regex normalizers (ISO 8601, Epoch, UUIDv4, Hex memory addresses) to detect recursive LLM intent despite volatile string mutations.
+* **Environment Extraction:** Snapshots host environment registers (git branch, commit, working directory, uncommitted files) into the state checkpoint.
+
+## Project Structure
+
+* `/crates/core`: The engine. Divided into pipelines:
+  * `checkin`: Auto-discovers transcripts across `.gemini`, `.claude`, `.cursor` and calculates degradation scoring (Rot Index).
+  * `detox`: Syntactic cleanse (ANSI stripping, regex secret masking, CAS spillover, Generational Arena).
+  * `reset`: Structural state alignment (loop normalizers, environment registers, zero-copy Capnp serialization).
+  * `discharge`: Canary verification, economic savings ledger, and markdown report generation.
+* `/crates/cli`: The command line interface using `clap`. Exposed as `agent-ooo` and the alias `ooo`.
+
+## Operational Rules
+
+All agents interacting with this repository MUST adhere to the operational guidelines defined in `AGENTS.md`. Key rules include an absolute ban on em dashes, requirement for sentence-case headings, and a mandatory Pre-Commit Self-Review protocol. If you modify the architecture, you must update this `llms.txt` file and `README.md` to reflect the changes.

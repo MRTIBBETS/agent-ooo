@@ -37,7 +37,7 @@ fn discover_recent_transcripts() -> Vec<SessionCandidate> {
     if let Ok(entries) = fs::read_dir(&claude_base) {
         for entry in entries.flatten() {
             if entry.path().extension().map(|e| e == "jsonl").unwrap_or(false) {
-                if let Ok(metadata) = fs::metadata(&entry.path()) {
+                if let Ok(metadata) = fs::metadata(entry.path()) {
                     candidates.push(SessionCandidate {
                         path: entry.path(),
                         modified: metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
@@ -53,7 +53,7 @@ fn discover_recent_transcripts() -> Vec<SessionCandidate> {
     if let Ok(entries) = fs::read_dir(&cursor_base) {
         for entry in entries.flatten() {
             if entry.path().extension().map(|e| e == "jsonl").unwrap_or(false) {
-                if let Ok(metadata) = fs::metadata(&entry.path()) {
+                if let Ok(metadata) = fs::metadata(entry.path()) {
                     candidates.push(SessionCandidate {
                         path: entry.path(),
                         modified: metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),

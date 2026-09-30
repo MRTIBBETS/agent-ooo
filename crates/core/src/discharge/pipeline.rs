@@ -17,7 +17,7 @@ pub fn execute_discharge(
     let canaries_passed = canary::verify_behavioral_canary(&agent_ooo_dir)
         .unwrap_or(false);
 
-    let cert = report::generate_spa_report(base_dir, triage, detox, reset, canaries_passed)?;
+    let cert = report::generate_spa_report(base_dir, triage, detox, reset, canaries_passed, 0.0)?;
 
     Ok(cert)
 }
