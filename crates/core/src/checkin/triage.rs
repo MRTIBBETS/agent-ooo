@@ -9,12 +9,8 @@ pub fn calculate_triage(
 ) -> TriageReceipt {
     let path_str = transcript_path.to_string_lossy().to_string();
     
-    // Extract a session ID from the path (e.g., the parent directory name or filename)
-    let session_id = transcript_path
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown_session".to_string());
+    // Extract a session ID from the path (Antigravity session directory or transcript file stem)
+    let session_id = crate::checkin::discovery::session_id_for(transcript_path);
 
     // 1. Detect repetitive tool call sequences (Loop Lock)
     let mut max_repetition = 0;

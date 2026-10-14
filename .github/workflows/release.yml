@@ -15,12 +15,14 @@ jobs:
     strategy:
       matrix:
         include:
+          # Archive names must contain the target triple: `agent-ooo update` (self_update)
+          # selects the release asset whose name includes the running binary's target.
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive-name: agent-ooo-macos-aarch64.tar.gz
+            archive-name: agent-ooo-aarch64-apple-darwin.tar.gz
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive-name: agent-ooo-linux-x86_64.tar.gz
+            archive-name: agent-ooo-x86_64-unknown-linux-gnu.tar.gz
 
     steps:
       - name: Checkout repository
@@ -94,20 +96,25 @@ jobs:
           ref: main # We want to commit back to the main branch
           
       - name: Update Formula
+        shell: bash # enables pipefail so a failed curl fails the step
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          MAC_SHA=$(curl -sL https://github.com/mrtibbets/agent-ooo/releases/download/${GITHUB_REF_NAME}/agent-ooo-macos-aarch64.tar.gz | shasum -a 256 | awk '{print $1}')
-          LINUX_SHA=$(curl -sL https://github.com/mrtibbets/agent-ooo/releases/download/${GITHUB_REF_NAME}/agent-ooo-linux-x86_64.tar.gz | shasum -a 256 | awk '{print $1}')
+          BASE="https://github.com/mrtibbets/agent-ooo/releases/download/${GITHUB_REF_NAME}"
+          MAC_ASSET="agent-ooo-aarch64-apple-darwin.tar.gz"
+          LINUX_ASSET="agent-ooo-x86_64-unknown-linux-gnu.tar.gz"
+          # -f fails on HTTP errors so a missing asset never gets hashed into the formula
+          MAC_SHA=$(curl -fsSL "${BASE}/${MAC_ASSET}" | shasum -a 256 | awk '{print $1}')
+          LINUX_SHA=$(curl -fsSL "${BASE}/${LINUX_ASSET}" | shasum -a 256 | awk '{print $1}')
           
           sed -i "s/version \".*\"/version \"${VERSION}\"/" Formula/agent-ooo.rb
           
           # Update Mac SHA
           sed -i "/on_macos do/,/end/ s/sha256 \".*\"/sha256 \"${MAC_SHA}\"/" Formula/agent-ooo.rb
-          sed -i "/on_macos do/,/end/ s|url \".*\"|url \"https://github.com/mrtibbets/agent-ooo/releases/download/${GITHUB_REF_NAME}/agent-ooo-macos-aarch64.tar.gz\"|" Formula/agent-ooo.rb
+          sed -i "/on_macos do/,/end/ s|url \".*\"|url \"${BASE}/${MAC_ASSET}\"|" Formula/agent-ooo.rb
           
           # Update Linux SHA
           sed -i "/on_linux do/,/end/ s/sha256 \".*\"/sha256 \"${LINUX_SHA}\"/" Formula/agent-ooo.rb
-          sed -i "/on_linux do/,/end/ s|url \".*\"|url \"https://github.com/mrtibbets/agent-ooo/releases/download/${GITHUB_REF_NAME}/agent-ooo-linux-x86_64.tar.gz\"|" Formula/agent-ooo.rb
+          sed -i "/on_linux do/,/end/ s|url \".*\"|url \"${BASE}/${LINUX_ASSET}\"|" Formula/agent-ooo.rb
           
       - name: Commit and Push
         run: |

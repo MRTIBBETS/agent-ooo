@@ -2,22 +2,22 @@
 
 > Spa retreats for your AI. Reset, refresh, relax.
 
-Agent OOO is a high-performance, zero-copy Rust engine that treats context rot in autonomous AI agents. By running Agent OOO between tasks, agents surgically strip out ANSI noise, mask API keys, offload massive payloads, and sever recursive error loops.
+Agent OOO is a fast, local Rust CLI that inspects and cleans AI agent transcripts between tasks. It masks credentials that leak into session logs, strips ANSI noise, offloads oversized payloads, and writes a compact Cap'n Proto checkpoint of session metadata. Everything runs locally.
 
 ## Architecture and Core Principles
 
-* **Zero-Copy Parsing:** Uses Cap'n Proto (`capnp`) for state definition, ensuring constant-memory bounds and instant serialization.
+* **Cap'n Proto checkpoints:** Session state is serialized to a Cap'n Proto checkpoint alongside a JSON copy. Transcripts themselves are parsed line by line as JSON.
 * **Bounded Allocations:** Transcripts are processed as streams; massive payloads (>512KB) are intercepted and spilled to disk via Blake3 content-addressed storage (CAS) rather than held in RAM.
-* **Deterministic Normalization:** Uses compiled regex normalizers (ISO 8601, Epoch, UUIDv4, Hex memory addresses) to detect recursive LLM intent despite volatile string mutations.
+* **Deterministic Normalization:** Compiled regex normalizers (ISO 8601, Epoch, UUIDv4, Hex memory addresses) exist as groundwork for loop detection. Loop severing is not implemented yet.
 * **Environment Extraction:** Snapshots host environment registers (git branch, commit, working directory, uncommitted files) into the state checkpoint.
 
 ## Project Structure
 
 * `/crates/core`: The engine. Divided into pipelines:
-  * `checkin`: Auto-discovers transcripts across `.gemini`, `.claude`, `.cursor` and calculates degradation scoring (Rot Index).
-  * `detox`: Syntactic cleanse (ANSI stripping, regex secret masking, CAS spillover, Generational Arena).
-  * `reset`: Structural state alignment (loop normalizers, environment registers, zero-copy Capnp serialization).
-  * `discharge`: Canary verification, economic savings ledger, and markdown report generation.
+  * `checkin`: Auto-discovers transcripts (Antigravity and Antigravity IDE at `~/.gemini/<app>/brain/<id>/.system_generated/logs/transcript.jsonl`, Claude Code at `~/.claude/projects/<project>/<session>.jsonl`, Cursor at `~/.cursor/sessions/*.jsonl`), parses both the Antigravity and Claude Code schemas, and calculates degradation scoring (Rot Index). Non-interactive callers get the most recent session.
+  * `detox`: Syntactic cleanse (ANSI stripping, regex secret masking for Anthropic, OpenAI, Google, GitHub, AWS, JWT, Bearer, and PEM keys, CAS spillover, Generational Arena).
+  * `reset`: Structural state alignment (loop normalizers, environment registers, zero-copy Capnp serialization). Loop severing is not implemented yet, and checkpoints do not yet persist arena contents.
+  * `discharge`: Checkpoint integrity check, economic savings ledger (detox savings only, arena compaction shown as a preview), and markdown report generation.
 * `/crates/cli`: The command line interface using `clap`. Exposed as `agent-ooo` and the alias `ooo`.
 
 ## Operational Rules

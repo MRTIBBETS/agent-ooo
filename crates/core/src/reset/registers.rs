@@ -10,9 +10,10 @@ pub struct EnvironmentRegisters {
 }
 
 pub fn extract_registers(workspace_dir: &Path) -> EnvironmentRegisters {
-    let mut registers = EnvironmentRegisters::default();
-    
-    registers.working_directory = workspace_dir.to_string_lossy().to_string();
+    let mut registers = EnvironmentRegisters {
+        working_directory: workspace_dir.to_string_lossy().to_string(),
+        ..Default::default()
+    };
 
     if let Ok(output) = Command::new("git")
         .arg("rev-parse")

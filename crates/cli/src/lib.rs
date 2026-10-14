@@ -12,7 +12,7 @@ use std::time::Instant;
 #[derive(Parser)]
 #[command(name = "agent-ooo")]
 #[command(bin_name = "agent-ooo")]
-#[command(version = "0.1.0")]
+#[command(version)]
 #[command(about = "Spa retreats for your AI. Reset, refresh, relax.", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
@@ -89,7 +89,7 @@ pub fn run() -> anyhow::Result<()> {
             let path = discovery::resolve_transcript_path(transcript.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
             let current_dir = env::current_dir()?;
             let (arena, _) = detox_pipeline::execute_detox(&path, &current_dir).map_err(|e| anyhow::anyhow!(e))?;
-            let session_id = path.file_name().unwrap_or_default().to_string_lossy();
+            let session_id = discovery::session_id_for(&path);
             let receipt = reset_pipeline::execute_reset(&session_id, &current_dir, &arena)?;
             println!("Checkpoint size: {} bytes", receipt.checkpoint_capnp_bytes);
         }
@@ -119,20 +119,21 @@ pub fn run() -> anyhow::Result<()> {
 
             // 3. Reset
             println!("\n{} Step 3: Structural Alignment (Reset)...", "=>".blue());
-            let session_id = path.file_name().unwrap_or_default().to_string_lossy();
+            let session_id = discovery::session_id_for(&path);
             let reset_receipt = reset_pipeline::execute_reset(&session_id, &current_dir, &arena)?;
             println!("   Checkpoints saved. Zero-copy state locked.");
 
             // 4. Discharge
             println!("\n{} Step 4: Verification & Discharge...", "=>".magenta());
-            let mut cert = discharge_pipeline::execute_discharge(&current_dir, &triage_receipt, &detox_receipt, &reset_receipt)?;
+            // Measured before the report is written so spa_report.md and the terminal agree.
+            let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+            let cert = discharge_pipeline::execute_discharge(&current_dir, &triage_receipt, &detox_receipt, &reset_receipt, elapsed_ms)?;
             
             println!("\n{}", "=============================================".bold().cyan());
             println!("{} Spa Retreat Complete!", "★".yellow());
-            cert.execution_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
             println!("* Execution Time: {:.2} ms", cert.execution_time_ms);
-            println!("* Canary Verification: {}", if cert.canaries_passed { "PASS".green() } else { "FAIL".red() });
-            println!("* Token Footprint Reduction: {:.2}%", cert.token_reduction_percentage);
+            println!("* Checkpoint Integrity: {}", if cert.canaries_passed { "PASS".green() } else { "FAIL".red() });
+            println!("* Token Reduction (Detox): {:.2}%", cert.token_reduction_percentage);
             println!("* Estimated Savings: ${:.4}", cert.net_savings_usd);
             println!("* Developer Hours Saved: {:.1}", cert.developer_hours_saved);
             println!("* Spa Report written to: {}", cert.spa_report_path);
@@ -153,7 +154,7 @@ pub fn run() -> anyhow::Result<()> {
                 .and_then(|update| update.update()) 
             {
                 Ok(status) => {
-                    if status.version() != env!("CARGO_PKG_VERSION") || status.version() != env!("CARGO_PKG_VERSION") {
+                    if status.is_updated() {
                         println!("{} Successfully updated to v{}", "★".yellow(), status.version());
                     } else {
                         println!("{} Already up to date (v{})", "★".green(), status.version());

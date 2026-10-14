@@ -10,63 +10,95 @@ struct SessionCandidate {
     agent_type: String,
 }
 
+fn push_candidate(candidates: &mut Vec<SessionCandidate>, path: PathBuf, agent_type: &str) {
+    if let Ok(metadata) = fs::metadata(&path) {
+        if metadata.is_file() {
+            candidates.push(SessionCandidate {
+                path,
+                modified: metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                agent_type: agent_type.to_string(),
+            });
+        }
+    }
+}
+
+/// Scans `<brain_dir>/<session>/` for a transcript. Prefers the current
+/// `.system_generated/logs/transcript.jsonl` layout and falls back to the legacy flat layout.
+fn scan_antigravity_brain(candidates: &mut Vec<SessionCandidate>, brain_dir: &Path, agent_type: &str) {
+    let Ok(entries) = fs::read_dir(brain_dir) else { return };
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let current = entry.path().join(".system_generated").join("logs").join("transcript.jsonl");
+        let legacy = entry.path().join("transcript.jsonl");
+        if current.is_file() {
+            push_candidate(candidates, current, agent_type);
+        } else if legacy.is_file() {
+            push_candidate(candidates, legacy, agent_type);
+        }
+    }
+}
+
+/// Pushes every `*.jsonl` file directly inside `dir`.
+fn scan_jsonl_dir(candidates: &mut Vec<SessionCandidate>, dir: &Path, agent_type: &str) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
+            push_candidate(candidates, path, agent_type);
+        }
+    }
+}
+
 /// Finds the most recently modified transcript files across known agent directories.
 fn discover_recent_transcripts() -> Vec<SessionCandidate> {
     let home = env::var("HOME").unwrap_or_else(|_| String::from("~"));
+    let home = Path::new(&home);
     let mut candidates = Vec::new();
 
-    // 1. Antigravity: ~/.gemini/antigravity/brain/*/transcript.jsonl
-    let antigravity_base = Path::new(&home).join(".gemini").join("antigravity").join("brain");
-    if let Ok(entries) = fs::read_dir(&antigravity_base) {
-        for entry in entries.flatten() {
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                let transcript_path = entry.path().join("transcript.jsonl");
-                if let Ok(metadata) = fs::metadata(&transcript_path) {
-                    candidates.push(SessionCandidate {
-                        path: transcript_path,
-                        modified: metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-                        agent_type: "Antigravity".to_string(),
-                    });
-                }
-            }
-        }
-    }
+    // 1. Antigravity: ~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl
+    scan_antigravity_brain(&mut candidates, &home.join(".gemini").join("antigravity").join("brain"), "Antigravity");
 
-    // 2. Claude Code: ~/.claude/logs/*.jsonl
-    let claude_base = Path::new(&home).join(".claude").join("logs");
-    if let Ok(entries) = fs::read_dir(&claude_base) {
-        for entry in entries.flatten() {
-            if entry.path().extension().map(|e| e == "jsonl").unwrap_or(false) {
-                if let Ok(metadata) = fs::metadata(entry.path()) {
-                    candidates.push(SessionCandidate {
-                        path: entry.path(),
-                        modified: metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-                        agent_type: "Claude Code".to_string(),
-                    });
-                }
-            }
-        }
-    }
+    // 2. Antigravity IDE: ~/.gemini/antigravity-ide/brain/<id>/.system_generated/logs/transcript.jsonl
+    scan_antigravity_brain(&mut candidates, &home.join(".gemini").join("antigravity-ide").join("brain"), "Antigravity IDE");
 
-    // 3. Cursor: ~/.cursor/sessions/*.jsonl
-    let cursor_base = Path::new(&home).join(".cursor").join("sessions");
-    if let Ok(entries) = fs::read_dir(&cursor_base) {
-        for entry in entries.flatten() {
-            if entry.path().extension().map(|e| e == "jsonl").unwrap_or(false) {
-                if let Ok(metadata) = fs::metadata(entry.path()) {
-                    candidates.push(SessionCandidate {
-                        path: entry.path(),
-                        modified: metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-                        agent_type: "Cursor".to_string(),
-                    });
-                }
+    // 3. Claude Code: ~/.claude/projects/<project>/<session>.jsonl (legacy: ~/.claude/logs/*.jsonl)
+    if let Ok(projects) = fs::read_dir(home.join(".claude").join("projects")) {
+        for project in projects.flatten() {
+            if project.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                scan_jsonl_dir(&mut candidates, &project.path(), "Claude Code");
             }
         }
     }
+    scan_jsonl_dir(&mut candidates, &home.join(".claude").join("logs"), "Claude Code");
+
+    // 4. Cursor: ~/.cursor/sessions/*.jsonl (unverified layout)
+    scan_jsonl_dir(&mut candidates, &home.join(".cursor").join("sessions"), "Cursor");
 
     // Sort by most recent first
-    candidates.sort_by(|a, b| b.modified.cmp(&a.modified));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.modified));
     candidates
+}
+
+/// Derives a stable session identifier from a transcript path.
+/// Antigravity transcripts live under `<session-id>/.system_generated/logs/`, so the
+/// session directory is used. Other transcripts use the file stem (Claude Code names files by session UUID).
+pub fn session_id_for(path: &Path) -> String {
+    let components: Vec<_> = path.components().collect();
+    if let Some(idx) = components.iter().position(|c| c.as_os_str() == ".system_generated") {
+        if idx > 0 {
+            return components[idx - 1].as_os_str().to_string_lossy().to_string();
+        }
+    }
+    if path.file_name().map(|n| n == "transcript.jsonl").unwrap_or(false) {
+        if let Some(parent) = path.parent().and_then(|p| p.file_name()) {
+            return parent.to_string_lossy().to_string();
+        }
+    }
+    path.file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown_session".to_string())
 }
 
 /// Resolves the transcript path, either from explicit user input or via interactive auto-discovery.
@@ -87,6 +119,12 @@ pub fn resolve_transcript_path(explicit_path: Option<&str>) -> Result<PathBuf, S
     }
 
     if candidates.len() == 1 {
+        return Ok(candidates[0].path.clone());
+    }
+
+    // Non-interactive callers (scripts, CI, other agents) get the most recent session
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!("No terminal detected. Using most recent session: {}", candidates[0].path.display());
         return Ok(candidates[0].path.clone());
     }
 
@@ -113,4 +151,27 @@ pub fn resolve_transcript_path(explicit_path: Option<&str>) -> Result<PathBuf, S
         .map_err(|e| e.to_string())?;
 
     Ok(candidates[selection].path.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_id_antigravity_system_generated() {
+        let p = Path::new("/h/.gemini/antigravity/brain/abc-123/.system_generated/logs/transcript.jsonl");
+        assert_eq!(session_id_for(p), "abc-123");
+    }
+
+    #[test]
+    fn session_id_antigravity_legacy() {
+        let p = Path::new("/h/.gemini/antigravity/brain/abc-123/transcript.jsonl");
+        assert_eq!(session_id_for(p), "abc-123");
+    }
+
+    #[test]
+    fn session_id_claude_code() {
+        let p = Path::new("/h/.claude/projects/-Users-me/882c47e8-b7ab.jsonl");
+        assert_eq!(session_id_for(p), "882c47e8-b7ab");
+    }
 }

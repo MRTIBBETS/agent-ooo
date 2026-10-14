@@ -18,19 +18,29 @@ pub fn generate_spa_report(
     let agent_ooo_dir = base_dir.join(".agent-ooo");
     std::fs::create_dir_all(&agent_ooo_dir)?;
 
-    let tokens_before = triage.total_input_tokens as f64;
-    let tokens_after = tokens_before - (detox.evicted_tokens as f64) - (detox.sanitized_bytes as f64 / 4.0);
-    
-    let token_reduction_percentage = if tokens_before > 0.0 {
-        ((tokens_before - tokens_after.max(0.0)) / tokens_before) * 100.0
+    // Measure before and after in the same unit (bytes of parsed transcript lines / 4).
+    // Only syntactic cleanse (redaction, ANSI, spillover) counts as realized savings.
+    // Arena compaction is reported as a preview: the checkpoint does not yet persist
+    // the retained turns, so evicted tokens are not a real reduction today.
+    let tokens_before = detox.raw_bytes as f64 / 4.0;
+    let tokens_after = detox.sanitized_bytes as f64 / 4.0;
+    let tokens_reduced = (tokens_before - tokens_after).max(0.0);
+    let compaction_preview_pct = if tokens_before > 0.0 {
+        (detox.evicted_tokens as f64 / tokens_before * 100.0).min(100.0)
     } else {
         0.0
     };
 
-    // Heuristics: Every 5 loops severed saves ~0.5 dev hours.
-    // Every 100k tokens reduced saves ~$0.50.
+    let token_reduction_percentage = if tokens_before > 0.0 {
+        (tokens_reduced / tokens_before) * 100.0
+    } else {
+        0.0
+    };
+
+    // Heuristics: each severed loop saves ~0.1 dev hours (6 minutes).
+    // Assumed blended input price: $5.00 per 1M tokens ($0.50 per 100k).
     let developer_hours_saved = (reset.severed_loops_count as f64) * 0.1;
-    let net_savings_usd = ((tokens_before - tokens_after.max(0.0)) / 100_000.0) * 0.5;
+    let net_savings_usd = (tokens_reduced / 100_000.0) * 0.5;
 
     let cert = DischargeCertificate {
         canaries_passed,
@@ -52,7 +62,8 @@ status: {status}
 # Agent OOO Spa Report
 
 **Session ID:** `{session_id}`
-**Canary Verification:** {canary_status}
+**Checkpoint Integrity:** {canary_status}
+**Execution Time:** {telemetry:.2} ms (local measurement, nothing is sent anywhere)
 
 ## 1. Syntactic Cleanse (Detox)
 * **Raw Footprint:** {raw} bytes
@@ -61,15 +72,15 @@ status: {status}
 * **Large Payloads Spilled to Disk:** {spilled}
 
 ## 2. Structural Alignment (Reset)
-* **Error Loops Severed:** {loops}
+* **Error Loops Severed:** {loops} (loop severing not implemented yet)
 * **Environment Registers Extracted:** {registers}
 * **Zero-copy Cap'n Proto Size:** {capnp} bytes
 
 ## 3. Economic Impact
-* **Token Reduction:** {reduction:.2}%
-* **Net Cost Savings:** ${savings:.4}
+* **Token Reduction (Detox):** {reduction:.2}%
+* **Net Cost Savings:** ${savings:.4} (assumes $5.00 per 1M input tokens)
 * **Developer Triage Time Saved:** {hours:.1} hours
-* **Execution Telemetry:** {telemetry:.2} ms
+* **Arena Compaction Preview:** {evicted} tokens ({preview:.2}%) in turns older than the last 100. Not yet persisted to the checkpoint, so not counted as savings.
 
 > "Reset, refresh, relax."
 "#,
@@ -86,6 +97,8 @@ status: {status}
         reduction = token_reduction_percentage,
         savings = net_savings_usd,
         hours = developer_hours_saved,
+        evicted = detox.evicted_tokens,
+        preview = compaction_preview_pct,
         telemetry = execution_time_ms,
     );
 

@@ -6,18 +6,21 @@ use crate::reset::ResetReceipt;
 use std::path::Path;
 
 /// Executes the discharge verification and report generation.
+/// `execution_time_ms` is the pipeline time measured by the caller up to this point,
+/// so the written report carries the real figure instead of a placeholder.
 pub fn execute_discharge(
     base_dir: &Path,
     triage: &TriageReceipt,
     detox: &DetoxReceipt,
     reset: &ResetReceipt,
+    execution_time_ms: f64,
 ) -> Result<DischargeCertificate, crate::OooError> {
     
     let agent_ooo_dir = base_dir.join(".agent-ooo");
     let canaries_passed = canary::verify_behavioral_canary(&agent_ooo_dir)
         .unwrap_or(false);
 
-    let cert = report::generate_spa_report(base_dir, triage, detox, reset, canaries_passed, 0.0)?;
+    let cert = report::generate_spa_report(base_dir, triage, detox, reset, canaries_passed, execution_time_ms)?;
 
     Ok(cert)
 }

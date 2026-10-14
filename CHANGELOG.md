@@ -82,3 +82,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Public `README.md` Polish:**
   - Rewrote the main repository README to document the 4-step Spa architecture, the zero-copy performance guarantees, and the new `update` command.
   - *Context:* Authored by Antigravity (Gemini).
+
+## [0.1.6] - 2026-10-14
+
+### Fixed
+- **Correctness release driven by the Local Machine Context Audit:**
+  - *Discovery:* `checkin/discovery.rs` now scans the layouts agents actually write: `~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl`, the same layout under `~/.gemini/antigravity-ide/`, and `~/.claude/projects/<project>/<session>.jsonl`. Legacy paths remain as fallbacks. Previously `agent-ooo spa` found no sessions on a real workstation.
+  - *Claude Code parsing:* `checkin/parser.rs` reads the nested `message.content[]` schema (text, thinking, `tool_use`, `tool_result`). Claude sessions previously scored 0.00.
+  - *Session IDs:* New `discovery::session_id_for` returns the Antigravity session directory or the Claude session UUID instead of `logs` or `transcript.jsonl`.
+  - *Savings math:* `discharge/report.rs` subtracted the entire sanitized footprint from the token total, reporting close to 100% reduction for every session. Before and after are now both derived from detox byte counts.
+  - *Byte accounting:* `detox/pipeline.rs` measures sanitized size as raw line length plus the real change in field lengths. Re-serializing silently unescaped `\u003c` sequences and reported them as savings. Unparseable lines are excluded from both totals.
+  - *Secret detection:* `detox/sanitizer.rs` adds Anthropic, OpenAI project, Google, GitHub, AWS, JWT, and PEM private key patterns. Bearer tokens require 20+ token characters, so prose such as "Bearer tokens" is no longer redacted.
+  - *ANSI stripping:* The old regex contained a literal `|` in its character class and missed most CSI and all OSC sequences.
+  - *Versioning:* Workspace version was stuck at 0.1.0 through tags v0.1.3 to v0.1.5, which broke `agent-ooo update`. CLI and banner now read `CARGO_PKG_VERSION`.
+  - *Reset receipt:* Environment register count reflects captured registers instead of a hardcoded 4. Loop severing still reports 0 and is scheduled for v0.2.
+  - Removed stray `AGENTS.md.orig`.
+  - *Honest reporting:* Arena eviction is no longer counted as savings. The checkpoint stores only session metadata and git registers, not the retained turns, so the spa report now shows eviction as an "Arena Compaction Preview" line. Realized savings come from detox only.
+  - *Checkpoint integrity:* `discharge/canary.rs` returned a hardcoded `Ok(true)`. It now verifies that both checkpoint files exist, the Cap'n Proto file is non-empty, and the JSON parses with a session ID. Labelled "Checkpoint Integrity" because it is structural, not behavioral.
+  - *Non-interactive discovery:* When stdin is not a terminal, auto-discovery selects the most recent session instead of failing with "not a terminal".
+  - Test suite grew from 3 to 14 tests during the audit pass.
+  - *Self-Review Fix:* Arena eviction accounting now uses a bounded size ledger that mirrors the 100 item ring buffer, rather than re-serializing evicted values.
+  - *Self-Review Fix:* Audit v2 surfaced `sk-` false positives on hyphenated words (`task-before-startup`) and anchors (`#ask-multiple-agents`). Added `\b` word boundaries.
+  - *Self-update asset naming:* Release archives are now named with the Rust target triple (`agent-ooo-aarch64-apple-darwin.tar.gz`, `agent-ooo-x86_64-unknown-linux-gnu.tar.gz`). `self_update` selects assets by target triple, so the old `macos-aarch64` names could never match.
+  - *Homebrew job hardening:* The formula updater uses `curl -f` with `pipefail`, so a missing asset fails the job instead of writing the hash of a 404 page into the formula.
+  - *Homebrew instructions:* The README tap command was wrong. A formula in the main repository needs the explicit URL: `brew tap mrtibbets/agent-ooo https://github.com/mrtibbets/agent-ooo`.
+  - *Execution telemetry:* `spa_report.md` and `spa_report.json` always recorded 0.00 ms because timing was captured after the report was written. Elapsed time is now passed into `execute_discharge`.
+  - *Positioning:* README and `llms.txt` no longer claim loop severing or a "pristine context window". They lead with what the audit measured: local credential masking and checkpointing.
+  - Added spillover tests (the only untested detox path) and resolved the two remaining clippy warnings. Test suite: 16 tests.
+  - *Context:* Authored by Antigravity (Claude Opus 5.5) using Rust 1.98.1.
