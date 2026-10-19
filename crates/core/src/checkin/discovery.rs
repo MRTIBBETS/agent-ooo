@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use dialoguer::{Select, theme::ColorfulTheme};
 
 #[derive(Debug, Clone)]
-struct SessionCandidate {
-    path: PathBuf,
-    modified: std::time::SystemTime,
-    agent_type: String,
+pub struct SessionCandidate {
+    pub path: PathBuf,
+    pub modified: std::time::SystemTime,
+    pub agent_type: String,
+    pub size_bytes: u64,
 }
 
 fn push_candidate(candidates: &mut Vec<SessionCandidate>, path: PathBuf, agent_type: &str) {
@@ -17,6 +18,7 @@ fn push_candidate(candidates: &mut Vec<SessionCandidate>, path: PathBuf, agent_t
                 path,
                 modified: metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
                 agent_type: agent_type.to_string(),
+                size_bytes: metadata.len(),
             });
         }
     }
@@ -52,7 +54,7 @@ fn scan_jsonl_dir(candidates: &mut Vec<SessionCandidate>, dir: &Path, agent_type
 }
 
 /// Finds the most recently modified transcript files across known agent directories.
-fn discover_recent_transcripts() -> Vec<SessionCandidate> {
+pub fn discover_recent_transcripts() -> Vec<SessionCandidate> {
     let home = env::var("HOME").unwrap_or_else(|_| String::from("~"));
     let home = Path::new(&home);
     let mut candidates = Vec::new();
@@ -91,7 +93,12 @@ pub fn session_id_for(path: &Path) -> String {
             return components[idx - 1].as_os_str().to_string_lossy().to_string();
         }
     }
-    if path.file_name().map(|n| n == "transcript.jsonl").unwrap_or(false) {
+    if path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n == "transcript.jsonl" || n == "transcript_full.jsonl")
+        .unwrap_or(false)
+    {
         if let Some(parent) = path.parent().and_then(|p| p.file_name()) {
             return parent.to_string_lossy().to_string();
         }
@@ -99,6 +106,41 @@ pub fn session_id_for(path: &Path) -> String {
     path.file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown_session".to_string())
+}
+
+/// Prefers the untruncated sibling `transcript_full.jsonl` when `path` points to `transcript.jsonl`
+/// and `transcript_full.jsonl` exists in the same directory.
+pub fn resolve_scan_target(path: &Path) -> PathBuf {
+    if path.file_name().and_then(|n| n.to_str()) == Some("transcript.jsonl") {
+        let full_path = path.with_file_name("transcript_full.jsonl");
+        if full_path.is_file() {
+            return full_path;
+        }
+    }
+    path.to_path_buf()
+}
+
+/// Resolves the transcript path without terminal interaction or stdout/stderr writes.
+/// Selects `explicit_path` if provided, or the most recent discovered transcript.
+pub fn resolve_transcript_non_interactive(explicit_path: Option<&str>) -> Result<PathBuf, String> {
+    if let Some(path_str) = explicit_path {
+        let path = PathBuf::from(path_str);
+        if path.exists() {
+            return Ok(path);
+        } else {
+            return Err(format!("Explicit transcript path not found: {}", path_str));
+        }
+    }
+
+    let candidates = discover_recent_transcripts();
+    candidates
+        .into_iter()
+        .next()
+        .map(|c| c.path)
+        .ok_or_else(|| {
+            "Could not auto-discover any agent transcripts in ~/.gemini, ~/.claude, or ~/.cursor"
+                .to_string()
+        })
 }
 
 /// Resolves the transcript path, either from explicit user input or via interactive auto-discovery.
@@ -173,5 +215,17 @@ mod tests {
     fn session_id_claude_code() {
         let p = Path::new("/h/.claude/projects/-Users-me/882c47e8-b7ab.jsonl");
         assert_eq!(session_id_for(p), "882c47e8-b7ab");
+    }
+
+    #[test]
+    fn resolve_scan_target_prefers_sibling_transcript_full() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let compact = dir.path().join("transcript.jsonl");
+        let full = dir.path().join("transcript_full.jsonl");
+        fs::write(&compact, "{}\n").unwrap();
+        assert_eq!(resolve_scan_target(&compact), compact);
+
+        fs::write(&full, "{}\n").unwrap();
+        assert_eq!(resolve_scan_target(&compact), full);
     }
 }
