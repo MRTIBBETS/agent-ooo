@@ -1,6 +1,6 @@
-use crate::schema::session_checkpoint;
-use crate::reset::registers::EnvironmentRegisters;
 use crate::detox::arena::MemoryArena;
+use crate::reset::registers::EnvironmentRegisters;
+use crate::schema::session_checkpoint;
 use capnp::message::{Builder, ReaderOptions};
 use capnp::serialize_packed;
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ pub fn write_checkpoints(
     checkpoint.set_timestamp(timestamp);
 
     let mut reg_list = checkpoint.reborrow().init_registers(4);
-    
+
     // Branch
     let mut r1 = reg_list.reborrow().get(0);
     r1.set_key("git_branch");
@@ -183,8 +183,8 @@ pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
 
-    let canary_ok = crate::discharge::canary::verify_behavioral_canary(&agent_ooo_dir)
-        .unwrap_or(false);
+    let canary_ok =
+        crate::discharge::canary::verify_behavioral_canary(&agent_ooo_dir).unwrap_or(false);
     let integrity_passed = canary_ok && !session_id.is_empty() && session_id == json_session_id;
 
     Ok(CheckpointInspection {

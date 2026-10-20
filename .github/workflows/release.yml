@@ -53,6 +53,7 @@ jobs:
           mkdir release_pkg
           cp target/${{ matrix.target }}/release/agent-ooo release_pkg/
           cp target/${{ matrix.target }}/release/ooo release_pkg/
+          cp target/${{ matrix.target }}/release/agent-ooo-mcp release_pkg/
           cp README.md release_pkg/
           if [ -f CHANGELOG.md ]; then cp CHANGELOG.md release_pkg/; fi
           if [ -f LICENSE ]; then cp LICENSE release_pkg/; fi

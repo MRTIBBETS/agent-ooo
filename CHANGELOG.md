@@ -6,9 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 > **AI Engineering Ledger:** This changelog explicitly tracks the AI models, orchestration runtimes, and core dependencies utilized to author milestones, providing an auditable trail of generative contributions.
 
-## [Unreleased]
+## [0.1.7] - 2026-10-19
 
 ### Added
+- **MCP Server (`crates/mcp`) and Core Inspection APIs:**
+  - Added workspace member `crates/mcp` (`agent-ooo-mcp`), a zero-async-overhead stdio JSON-RPC 2.0 Model Context Protocol server exposing `spa`, `checkin`, `detox`, `reset`, and `discharge` in 1:1 parity with the CLI subcommands.
+  - Added `--help` and `--version` flags plus terminal `stderr` hints to `agent-ooo-mcp`, and updated `.github/workflows/release.yml` and `Formula/agent-ooo.rb` so GitHub Releases and Homebrew package and test `agent-ooo-mcp` alongside `agent-ooo` and `ooo`.
+  - Implemented `detox::sanitizer::scan_transcript_secrets` to stream transcripts line by line in constant memory, recursively inspect JSON string values, prefer sibling `transcript_full.jsonl` files on Antigravity sessions, extract JWT `role` claims (such as `service_role`) via zero-dependency base64url decoding, deduplicate matches via `blake3` digests so raw secrets are never retained in heap structures, and emit masked previews (`prefix...suffix`).
+  - Implemented `reset::serializer::inspect_checkpoint` to deserialize packed `.agent-ooo/checkpoint.capnp` messages alongside `.agent-ooo/checkpoint.json` and cross-verify session IDs and structural integrity.
+  - Exported `discover_recent_transcripts`, `resolve_scan_target`, and `resolve_transcript_non_interactive` in `checkin::discovery` so non-interactive tool callers never touch `stdin` or `stdout`.
+  - *Self-Review Fix:* Replaced full-token `Vec<char>` allocation in `mask_secret_preview` with bounded iterator extraction (`take(7)` / `rev().take(4)`), added directory resolution to `resolve_scan_target` so passing a session directory resolves its nested transcript, clamped `checkin` session listing limits to `1..=200`, and standardized the MCP execution boundary on `anyhow::Result`.
+  - *Context:* Authored by Antigravity (Gemini 4 Argon Medium) using Rust 1.99.1 and Cap'n Proto 1.5.0.
 - **AGENTS.md:** Established root operational governance and self-review protocols for future AI agents operating within the repository.
   - *Context:* Authored by Antigravity (Gemini).
 

@@ -1,7 +1,7 @@
+use dialoguer::{theme::ColorfulTheme, Select};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use dialoguer::{Select, theme::ColorfulTheme};
 
 #[derive(Debug, Clone)]
 pub struct SessionCandidate {
@@ -16,7 +16,9 @@ fn push_candidate(candidates: &mut Vec<SessionCandidate>, path: PathBuf, agent_t
         if metadata.is_file() {
             candidates.push(SessionCandidate {
                 path,
-                modified: metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                modified: metadata
+                    .modified()
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
                 agent_type: agent_type.to_string(),
                 size_bytes: metadata.len(),
             });
@@ -26,13 +28,23 @@ fn push_candidate(candidates: &mut Vec<SessionCandidate>, path: PathBuf, agent_t
 
 /// Scans `<brain_dir>/<session>/` for a transcript. Prefers the current
 /// `.system_generated/logs/transcript.jsonl` layout and falls back to the legacy flat layout.
-fn scan_antigravity_brain(candidates: &mut Vec<SessionCandidate>, brain_dir: &Path, agent_type: &str) {
-    let Ok(entries) = fs::read_dir(brain_dir) else { return };
+fn scan_antigravity_brain(
+    candidates: &mut Vec<SessionCandidate>,
+    brain_dir: &Path,
+    agent_type: &str,
+) {
+    let Ok(entries) = fs::read_dir(brain_dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
-        let current = entry.path().join(".system_generated").join("logs").join("transcript.jsonl");
+        let current = entry
+            .path()
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript.jsonl");
         let legacy = entry.path().join("transcript.jsonl");
         if current.is_file() {
             push_candidate(candidates, current, agent_type);
@@ -44,7 +56,9 @@ fn scan_antigravity_brain(candidates: &mut Vec<SessionCandidate>, brain_dir: &Pa
 
 /// Pushes every `*.jsonl` file directly inside `dir`.
 fn scan_jsonl_dir(candidates: &mut Vec<SessionCandidate>, dir: &Path, agent_type: &str) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
@@ -60,10 +74,18 @@ pub fn discover_recent_transcripts() -> Vec<SessionCandidate> {
     let mut candidates = Vec::new();
 
     // 1. Antigravity: ~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl
-    scan_antigravity_brain(&mut candidates, &home.join(".gemini").join("antigravity").join("brain"), "Antigravity");
+    scan_antigravity_brain(
+        &mut candidates,
+        &home.join(".gemini").join("antigravity").join("brain"),
+        "Antigravity",
+    );
 
     // 2. Antigravity IDE: ~/.gemini/antigravity-ide/brain/<id>/.system_generated/logs/transcript.jsonl
-    scan_antigravity_brain(&mut candidates, &home.join(".gemini").join("antigravity-ide").join("brain"), "Antigravity IDE");
+    scan_antigravity_brain(
+        &mut candidates,
+        &home.join(".gemini").join("antigravity-ide").join("brain"),
+        "Antigravity IDE",
+    );
 
     // 3. Claude Code: ~/.claude/projects/<project>/<session>.jsonl (legacy: ~/.claude/logs/*.jsonl)
     if let Ok(projects) = fs::read_dir(home.join(".claude").join("projects")) {
@@ -73,10 +95,18 @@ pub fn discover_recent_transcripts() -> Vec<SessionCandidate> {
             }
         }
     }
-    scan_jsonl_dir(&mut candidates, &home.join(".claude").join("logs"), "Claude Code");
+    scan_jsonl_dir(
+        &mut candidates,
+        &home.join(".claude").join("logs"),
+        "Claude Code",
+    );
 
     // 4. Cursor: ~/.cursor/sessions/*.jsonl (unverified layout)
-    scan_jsonl_dir(&mut candidates, &home.join(".cursor").join("sessions"), "Cursor");
+    scan_jsonl_dir(
+        &mut candidates,
+        &home.join(".cursor").join("sessions"),
+        "Cursor",
+    );
 
     // Sort by most recent first
     candidates.sort_by_key(|c| std::cmp::Reverse(c.modified));
@@ -88,9 +118,15 @@ pub fn discover_recent_transcripts() -> Vec<SessionCandidate> {
 /// session directory is used. Other transcripts use the file stem (Claude Code names files by session UUID).
 pub fn session_id_for(path: &Path) -> String {
     let components: Vec<_> = path.components().collect();
-    if let Some(idx) = components.iter().position(|c| c.as_os_str() == ".system_generated") {
+    if let Some(idx) = components
+        .iter()
+        .position(|c| c.as_os_str() == ".system_generated")
+    {
         if idx > 0 {
-            return components[idx - 1].as_os_str().to_string_lossy().to_string();
+            return components[idx - 1]
+                .as_os_str()
+                .to_string_lossy()
+                .to_string();
         }
     }
     if path
@@ -109,8 +145,26 @@ pub fn session_id_for(path: &Path) -> String {
 }
 
 /// Prefers the untruncated sibling `transcript_full.jsonl` when `path` points to `transcript.jsonl`
-/// and `transcript_full.jsonl` exists in the same directory.
+/// and `transcript_full.jsonl` exists in the same directory. Also resolves session directories
+/// directly to their nested transcript file.
 pub fn resolve_scan_target(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        let candidates = [
+            path.join(".system_generated")
+                .join("logs")
+                .join("transcript_full.jsonl"),
+            path.join(".system_generated")
+                .join("logs")
+                .join("transcript.jsonl"),
+            path.join("transcript_full.jsonl"),
+            path.join("transcript.jsonl"),
+        ];
+        for candidate in candidates {
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
     if path.file_name().and_then(|n| n.to_str()) == Some("transcript.jsonl") {
         let full_path = path.with_file_name("transcript_full.jsonl");
         if full_path.is_file() {
@@ -155,9 +209,12 @@ pub fn resolve_transcript_path(explicit_path: Option<&str>) -> Result<PathBuf, S
     }
 
     let candidates = discover_recent_transcripts();
-    
+
     if candidates.is_empty() {
-        return Err("Could not auto-discover any agent transcripts in ~/.gemini, ~/.claude, or ~/.cursor".to_string());
+        return Err(
+            "Could not auto-discover any agent transcripts in ~/.gemini, ~/.claude, or ~/.cursor"
+                .to_string(),
+        );
     }
 
     if candidates.len() == 1 {
@@ -166,7 +223,10 @@ pub fn resolve_transcript_path(explicit_path: Option<&str>) -> Result<PathBuf, S
 
     // Non-interactive callers (scripts, CI, other agents) get the most recent session
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        eprintln!("No terminal detected. Using most recent session: {}", candidates[0].path.display());
+        eprintln!(
+            "No terminal detected. Using most recent session: {}",
+            candidates[0].path.display()
+        );
         return Ok(candidates[0].path.clone());
     }
 
@@ -177,11 +237,22 @@ pub fn resolve_transcript_path(explicit_path: Option<&str>) -> Result<PathBuf, S
     let now = std::time::SystemTime::now();
 
     for candidate in candidates.iter().take(display_count) {
-        let elapsed = now.duration_since(candidate.modified).unwrap_or(std::time::Duration::from_secs(0));
+        let elapsed = now
+            .duration_since(candidate.modified)
+            .unwrap_or(std::time::Duration::from_secs(0));
         let mins = elapsed.as_secs() / 60;
-        let time_str = if mins == 0 { "just now".to_string() } else if mins < 60 { format!("{} mins ago", mins) } else { format!("{} hrs ago", mins / 60) };
-        
-        options.push(format!("{:<15} (last active: {})", candidate.agent_type, time_str));
+        let time_str = if mins == 0 {
+            "just now".to_string()
+        } else if mins < 60 {
+            format!("{} mins ago", mins)
+        } else {
+            format!("{} hrs ago", mins / 60)
+        };
+
+        options.push(format!(
+            "{:<15} (last active: {})",
+            candidate.agent_type, time_str
+        ));
     }
 
     println!();
@@ -201,7 +272,9 @@ mod tests {
 
     #[test]
     fn session_id_antigravity_system_generated() {
-        let p = Path::new("/h/.gemini/antigravity/brain/abc-123/.system_generated/logs/transcript.jsonl");
+        let p = Path::new(
+            "/h/.gemini/antigravity/brain/abc-123/.system_generated/logs/transcript.jsonl",
+        );
         assert_eq!(session_id_for(p), "abc-123");
     }
 

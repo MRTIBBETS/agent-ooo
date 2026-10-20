@@ -4,22 +4,23 @@
 
 Agent OOO is a fast, local Rust CLI that inspects and cleans AI agent transcripts between tasks. It masks credentials that leak into session logs, strips ANSI noise, offloads oversized payloads, and writes a compact Cap'n Proto checkpoint of session metadata. Everything runs locally.
 
-## Architecture and Core Principles
+## Architecture and core principles
 
 * **Cap'n Proto checkpoints:** Session state is serialized to a Cap'n Proto checkpoint alongside a JSON copy. Transcripts themselves are parsed line by line as JSON.
 * **Bounded Allocations:** Transcripts are processed as streams; massive payloads (>512KB) are intercepted and spilled to disk via Blake3 content-addressed storage (CAS) rather than held in RAM.
 * **Deterministic Normalization:** Compiled regex normalizers (ISO 8601, Epoch, UUIDv4, Hex memory addresses) exist as groundwork for loop detection. Loop severing is not implemented yet.
 * **Environment Extraction:** Snapshots host environment registers (git branch, commit, working directory, uncommitted files) into the state checkpoint.
 
-## Project Structure
+## Project structure
 
 * `/crates/core`: The engine. Divided into pipelines:
   * `checkin`: Auto-discovers transcripts (Antigravity and Antigravity IDE at `~/.gemini/<app>/brain/<id>/.system_generated/logs/transcript.jsonl`, Claude Code at `~/.claude/projects/<project>/<session>.jsonl`, Cursor at `~/.cursor/sessions/*.jsonl`), parses both the Antigravity and Claude Code schemas, and calculates degradation scoring (Rot Index). Non-interactive callers get the most recent session.
-  * `detox`: Syntactic cleanse (ANSI stripping, regex secret masking for Anthropic, OpenAI, Google, GitHub, AWS, JWT, Bearer, and PEM keys, CAS spillover, Generational Arena).
-  * `reset`: Structural state alignment (loop normalizers, environment registers, zero-copy Capnp serialization). Loop severing is not implemented yet, and checkpoints do not yet persist arena contents.
+  * `detox`: Syntactic cleanse (ANSI stripping, regex secret masking and structured secret scanning for Anthropic, OpenAI, Google, GitHub, AWS, JWT, Bearer, and PEM keys, CAS spillover, Generational Arena). Secret scanning prefers sibling `transcript_full.jsonl` files when present, extracts JWT `role` claims locally, and hashes raw tokens with `blake3` so plaintext credentials are never held in memory or echoed.
+  * `reset`: Structural state alignment (loop normalizers, environment registers, zero-copy Capnp serialization and deserialization via `inspect_checkpoint`). Loop severing is not implemented yet, and checkpoints do not yet persist arena contents.
   * `discharge`: Checkpoint integrity check, economic savings ledger (detox savings only, arena compaction shown as a preview), and markdown report generation.
 * `/crates/cli`: The command line interface using `clap`. Exposed as `agent-ooo` and the alias `ooo`.
+* `/crates/mcp`: Lightweight stdio Model Context Protocol (MCP) server (`agent-ooo-mcp`) exposing the same 5 commands as the CLI (`spa`, `checkin`, `detox`, `reset`, `discharge`) over JSON-RPC 2.0.
 
-## Operational Rules
+## Operational rules
 
 All agents interacting with this repository MUST adhere to the operational guidelines defined in `AGENTS.md`. Key rules include an absolute ban on em dashes, requirement for sentence-case headings, and a mandatory Pre-Commit Self-Review protocol. If you modify the architecture, you must update this `llms.txt` file and `README.md` to reflect the changes.

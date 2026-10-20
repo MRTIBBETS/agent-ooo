@@ -21,10 +21,12 @@ class AgentOoo < Formula
   def install
     bin.install "agent-ooo"
     bin.install "ooo"
+    bin.install "agent-ooo-mcp"
   end
 
   test do
     system "#{bin}/agent-ooo", "--help"
     system "#{bin}/ooo", "--help"
+    system "#{bin}/agent-ooo-mcp", "--help"
   end
 end

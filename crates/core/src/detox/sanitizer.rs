@@ -17,14 +17,14 @@ static ANSI_RE: LazyLock<Regex> = LazyLock::new(|| {
 // mentioning "Bearer tokens" or "sk-" prefixes is not redacted.
 static SECRET_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r"\bsk-ant-[A-Za-z0-9_\-]{20,}",                                 // Anthropic
-        r"|\bsk-(?:proj-)?[A-Za-z0-9_\-]{20,}",                          // OpenAI
-        r"|AIza[0-9A-Za-z_\-]{35}",                                      // Google / GCP API key
-        r"|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}",     // GitHub
-        r"|AKIA[0-9A-Z]{16}",                                            // AWS access key ID
+        r"\bsk-ant-[A-Za-z0-9_\-]{20,}",        // Anthropic
+        r"|\bsk-(?:proj-)?[A-Za-z0-9_\-]{20,}", // OpenAI
+        r"|AIza[0-9A-Za-z_\-]{35}",             // Google / GCP API key
+        r"|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}", // GitHub
+        r"|AKIA[0-9A-Z]{16}",                   // AWS access key ID
         r"|eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}", // JWT
-        r"|(?i:bearer)\s+[A-Za-z0-9\-._~+/]{20,}=*",                     // Bearer token
-        r"|-----BEGIN [A-Z ]*PRIVATE KEY-----",                          // PEM private key header
+        r"|(?i:bearer)\s+[A-Za-z0-9\-._~+/]{20,}=*", // Bearer token
+        r"|-----BEGIN [A-Z ]*PRIVATE KEY-----", // PEM private key header
     ))
     .unwrap()
 });
@@ -48,24 +48,79 @@ pub struct TranscriptScanReport {
     pub findings: Vec<SecretFinding>,
 }
 
-/// Classifies a matched secret string into a canonical secret type identifier.
-pub fn classify_secret(matched: &str) -> &'static str {
-    if matched.starts_with("sk-ant-") {
-        "anthropic_api_key"
-    } else if matched.starts_with("sk-") {
-        "openai_api_key"
-    } else if matched.starts_with("AIza") {
-        "google_api_key"
-    } else if matched.starts_with("gh") || matched.starts_with("github_pat_") {
-        "github_token"
-    } else if matched.starts_with("AKIA") {
-        "aws_access_key"
-    } else if matched.starts_with("eyJ") {
-        "jwt"
-    } else if matched.starts_with("-----BEGIN ") {
-        "pem_private_key"
+/// Decodes a base64url (or standard base64) byte slice without external dependencies.
+fn decode_base64url(input: &[u8]) -> Option<Vec<u8>> {
+    if input.len() > 4096 {
+        return None;
+    }
+    let mut out = Vec::with_capacity((input.len() * 3) / 4);
+    let mut buf: u32 = 0;
+    let mut bits: u8 = 0;
+
+    for &b in input {
+        if b == b'=' {
+            break;
+        }
+        let val = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'-' | b'+' => 62,
+            b'_' | b'/' => 63,
+            _ => return None,
+        };
+        buf = (buf << 6) | u32::from(val);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xFF) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// Extracts the `role` claim from a JWT payload segment if present and safe.
+fn extract_jwt_role(jwt: &str) -> Option<String> {
+    let mut parts = jwt.split('.');
+    let _header = parts.next()?;
+    let payload_b64 = parts.next()?;
+    let decoded = decode_base64url(payload_b64.as_bytes())?;
+    let val: Value = serde_json::from_slice(&decoded).ok()?;
+    let role = val.get("role")?.as_str()?;
+    if !role.is_empty()
+        && role.len() <= 64
+        && role
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        Some(role.to_string())
     } else {
-        "bearer_token"
+        None
+    }
+}
+
+/// Classifies a matched secret string into a canonical secret type identifier.
+/// For JWTs carrying a `role` claim (such as Supabase `service_role`), appends the role.
+pub fn classify_secret(matched: &str) -> String {
+    if matched.starts_with("sk-ant-") {
+        "anthropic_api_key".to_string()
+    } else if matched.starts_with("sk-") {
+        "openai_api_key".to_string()
+    } else if matched.starts_with("AIza") {
+        "google_api_key".to_string()
+    } else if matched.starts_with("gh") || matched.starts_with("github_pat_") {
+        "github_token".to_string()
+    } else if matched.starts_with("AKIA") {
+        "aws_access_key".to_string()
+    } else if matched.starts_with("eyJ") {
+        match extract_jwt_role(matched) {
+            Some(role) => format!("jwt (role: {role})"),
+            None => "jwt".to_string(),
+        }
+    } else if matched.starts_with("-----BEGIN ") {
+        "pem_private_key".to_string()
+    } else {
+        "bearer_token".to_string()
     }
 }
 
@@ -84,10 +139,12 @@ pub fn mask_secret_preview(matched: &str) -> String {
         return matched.to_string();
     }
     let token = normalize_secret_token(matched);
-    let chars: Vec<char> = token.chars().collect();
-    if chars.len() > 14 {
-        let prefix: String = chars[..7].iter().collect();
-        let suffix: String = chars[chars.len() - 4..].iter().collect();
+    let char_count = token.chars().count();
+    if char_count > 14 {
+        let prefix: String = token.chars().take(7).collect();
+        let mut suffix_chars: Vec<char> = token.chars().rev().take(4).collect();
+        suffix_chars.reverse();
+        let suffix: String = suffix_chars.into_iter().collect();
         format!("{prefix}...{suffix}")
     } else {
         "[REDACTED_SECRET]".to_string()
@@ -103,7 +160,6 @@ fn scan_str_into(
 ) {
     for mat in SECRET_RE.find_iter(text) {
         let raw = mat.as_str();
-        let secret_type = classify_secret(raw);
         let token = normalize_secret_token(raw);
         // Hash normalized token so raw secret material is never retained in memory.
         let hash = blake3::hash(token.as_bytes());
@@ -116,7 +172,7 @@ fn scan_str_into(
             let idx = findings.len();
             index_by_hash.insert(hash, idx);
             findings.push(SecretFinding {
-                secret_type: secret_type.to_string(),
+                secret_type: classify_secret(raw),
                 masked_preview: mask_secret_preview(raw),
                 occurrences: 1,
                 first_line: line_num,
@@ -203,7 +259,7 @@ pub fn scan_transcript_secrets(path: &Path) -> crate::Result<TranscriptScanRepor
 /// Sanitizes a string by stripping ANSI escape codes and masking detected secrets.
 pub fn sanitize_content(content: &str) -> (String, usize) {
     let mut redactions = 0;
-    
+
     // First, mask secrets
     let masked = SECRET_RE.replace_all(content, |_: &regex::Captures| {
         redactions += 1;
@@ -304,5 +360,11 @@ mod tests {
         assert_eq!(report.findings[1].masked_preview, "AKIAABC...MNOP");
         assert_eq!(report.findings[1].occurrences, 1);
     }
-}
 
+    #[test]
+    fn test_jwt_role_extraction() {
+        // Payload is {"role":"service_role","iss":"supabase"} -> eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UifQ
+        let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UifQ.signature12345";
+        assert_eq!(classify_secret(jwt), "jwt (role: service_role)");
+    }
+}
