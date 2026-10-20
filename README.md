@@ -2,15 +2,17 @@
 
 **Spa retreats for your AI. Reset, refresh, relax.**
 
-Agent OOO is a fast, local Rust CLI that inspects and cleans AI agent transcripts between tasks. It masks credentials that leak into session logs, strips ANSI noise, offloads oversized payloads, and writes a compact Cap'n Proto checkpoint of session metadata. Everything runs locally. Nothing is sent anywhere.
+Even autonomous agents need an occasional out-of-office day. After hours of grepping codebases, wrestling compiler errors, and accidentally pasting `.env` credentials into their own logs, your agent's session history gets tense.
+
+**Agent OOO** is a fast, local Rust day spa (`agent-ooo`, alias `ooo`) and Model Context Protocol server (`agent-ooo-mcp`) that checks in tired AI agent transcripts between tasks. It scrubs leaked API keys and tokens from session logs, strips terminal ANSI residue, offloads oversized payloads into cold storage, and locks session metadata into a compact Cap'n Proto checkpoint. Everything runs locally on your machine. Nothing leaves the sanctuary.
 
 ## Installation
 
-Agent OOO ships as a single binary for macOS (Apple Silicon) and Linux (x86_64).
+Agent OOO ships prebuilt binaries (`agent-ooo`, `ooo`, and `agent-ooo-mcp`) for macOS (Apple Silicon) and Linux (`x86_64`).
 
 **Homebrew**
 
-The formula lives in this repository, so the tap needs the repository URL:
+The formula lives in this repository, so pass the repository URL when tapping:
 
 ```bash
 brew tap mrtibbets/agent-ooo https://github.com/mrtibbets/agent-ooo
@@ -22,12 +24,14 @@ brew install agent-ooo
 Download the archive for your platform from [GitHub Releases](https://github.com/mrtibbets/agent-ooo/releases), extract it, and place `agent-ooo`, `ooo`, and `agent-ooo-mcp` in your `$PATH`.
 
 **From source** (requires Rust and Cap'n Proto):
+
 ```bash
 cargo install --git https://github.com/mrtibbets/agent-ooo agent-ooo
 cargo install --git https://github.com/mrtibbets/agent-ooo agent-ooo-mcp
 ```
 
 From a local clone:
+
 ```bash
 cargo install --path crates/cli
 cargo install --path crates/mcp
@@ -35,31 +39,27 @@ cargo install --path crates/mcp
 
 ## The spa package
 
-The primary command is `spa`. It automatically discovers your most recent active session (Antigravity, Antigravity IDE, Claude Code, or Cursor) and runs the full 4-step treatment process. Pass a transcript path to target a specific session.
+The signature treatment is `spa`. Run it with no arguments to automatically discover your most recent active session across Antigravity, Antigravity IDE, Claude Code, or Cursor, or pass a specific `.jsonl` transcript path.
 
 ```bash
 agent-ooo spa
-agent-ooo spa ~/.claude/projects/<project>/<session>.jsonl
+ooo spa ~/.claude/projects/<project>/<session>.jsonl
 ```
 
-### The 4-step treatment:
-1. **Checkin:** Parses your transcript history and calculates a degradation "Rot Index."
-2. **Detox:** Strips terminal ANSI codes, masks leaked API secrets (Anthropic, OpenAI, Google, GitHub, AWS, JWT, Bearer, PEM), and spills payloads larger than 512KB to disk.
-3. **Reset:** Captures git environment registers and locks session state into a zero-copy Cap'n Proto checkpoint. Intent-hash loop severing is planned for v0.2.
-4. **Discharge:** Verifies checkpoint integrity and generates a `spa_report.md` detailing detox savings and an arena compaction preview.
+You can also book individual treatments (`checkin`, `detox`, `reset`, `discharge`) a la carte.
 
-## MCP server
+### The 4-step treatment
 
-`agent-ooo-mcp` exposes Agent OOO over standard I/O using the Model Context Protocol (JSON-RPC 2.0), allowing agents to audit sessions and inspect checkpoints directly as tool calls.
+1. **Checkin (Intake & triage):** Admits the session to the spa, parses the transcript in a constant-memory stream, and calculates a context degradation "Rot Index."
+2. **Detox (Deep-tissue cleanse & credential hygiene):** Strips terminal ANSI escape codes, detects and masks leaked secrets (Anthropic, OpenAI, Google, GitHub, AWS, Bearer tokens, PEM private keys, and JWTs including decoded `role` claims such as `service_role`), and spills payloads over 512 KB into `blake3` content-addressed cold storage.
+3. **Reset (Structural alignment):** Captures host git registers (branch, commit, working directory, uncommitted files) and writes a zero-copy Cap'n Proto checkpoint alongside a portable JSON copy. Intent-hash loop severing is scheduled for v0.2.
+4. **Discharge (Exit exam & clean bill of health):** Verifies structural checkpoint integrity and issues a signed `.agent-ooo/spa_report.md` and `spa_report.json` summarizing detox results and an arena compaction preview.
 
-Build and run from a local checkout:
+## Self-care via MCP (`agent-ooo-mcp`)
 
-```bash
-cargo build --release -p agent-ooo-mcp
-./target/release/agent-ooo-mcp
-```
+Agents can also check themselves into the spa. `agent-ooo-mcp` exposes the exact same 5 treatments over standard I/O using the Model Context Protocol (JSON-RPC 2.0), so any MCP-capable agent can audit its own transcripts for leaked credentials or inspect checkpoints as a native tool call.
 
-Add `agent-ooo-mcp` to your MCP client configuration (such as Claude Code, Antigravity, or Cursor):
+Add `agent-ooo-mcp` to your MCP client configuration (such as Antigravity, Claude Code, or Cursor):
 
 ```json
 {
@@ -72,34 +72,48 @@ Add `agent-ooo-mcp` to your MCP client configuration (such as Claude Code, Antig
 }
 ```
 
-### Exposed MCP tools
+### Treatment menu (MCP tools)
 
-The MCP tool names match the CLI subcommands 1:1:
+The MCP tool surface mirrors the CLI subcommands 1:1:
 
-* **`spa`:** Executes the full 4-step pipeline (`checkin`, `detox`, `reset`, `discharge`) non-interactively and writes checkpoints and `spa_report.md` to `.agent-ooo/`.
+* **`spa`:** Runs the full 4-step retreat (`checkin`, `detox`, `reset`, `discharge`) non-interactively and writes checkpoints and `spa_report.md` to `.agent-ooo/`.
 * **`checkin`:** Triages a session transcript (Rot Index, token count, tool call repetitions), or lists discovered sessions across Antigravity, Antigravity IDE, Claude Code, and Cursor when `list_sessions: true` is passed.
-* **`detox`:** Streams a session transcript (or all discovered sessions with `all_sessions: true`) in constant memory, preferring sibling `transcript_full.jsonl` files for Antigravity sessions so truncated tool outputs are still scanned. Returns the detox receipt along with deduplicated secret classifications, line ranges, occurrence counts, and masked previews (`first 7...last 4`) without echoing raw credentials into the agent context.
-* **`reset`:** Extracts git environment registers and writes zero-copy `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json` files.
+* **`detox`:** Streams a session transcript (or every discovered session on the machine with `all_sessions: true`) in constant memory. Automatically prefers sibling `transcript_full.jsonl` files for Antigravity sessions so truncated tool outputs are still inspected. Hashes raw tokens with `blake3` and returns only masked previews (`first 7...last 4`), line numbers, and occurrence counts so raw credentials are never echoed back into the agent's context window.
+* **`reset`:** Extracts git environment registers and writes `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`.
 * **`discharge`:** Verifies structural checkpoint integrity and deserializes `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`, returning session metadata, git environment registers, and arena counts.
+
+## What gets written to `.agent-ooo/`
+
+Running a treatment leaves your source transcripts untouched and writes its artifacts to `.agent-ooo/` in the target workspace:
+
+```text
+.agent-ooo/
+├── checkpoint.capnp   # Packed Cap'n Proto binary checkpoint
+├── checkpoint.json    # Portable JSON companion checkpoint
+├── spa_report.md      # Clinical verification & detox summary for humans
+├── spa_report.json    # Machine-readable telemetry certificate
+└── spillover/         # Content-addressed cold storage for payloads > 512 KB
+    └── <blake3>.bin
+```
 
 ## Updating
 
-If you installed with Homebrew, update with Homebrew:
+If you installed with Homebrew, upgrade with Homebrew:
 
 ```bash
 brew upgrade agent-ooo
 ```
 
-If you installed manually, the built-in updater downloads the latest release binary from GitHub:
+If you installed manually, the built-in updater pulls the latest `agent-ooo` binary from GitHub Releases:
 
 ```bash
 agent-ooo update
 ```
 
-`agent-ooo update` replaces the `agent-ooo` binary only. If you also use the `ooo` alias, reinstall it from the same release archive.
+`agent-ooo update` replaces the `agent-ooo` binary in place. To update `ooo` and `agent-ooo-mcp` on a manual install, extract them from the latest release archive or run `brew upgrade agent-ooo`.
 
 ## Architecture
 
-Agent OOO uses Cap'n Proto for the checkpoint format, `blake3` for content-addressed payload spilling, and a generational memory arena that pins system instructions while cycling older turns. The arena is not yet persisted to the checkpoint. See [CHANGELOG.md](CHANGELOG.md) for what is built and what is planned.
+Agent OOO is organized as a three-crate Rust workspace (`crates/core`, `crates/cli`, `crates/mcp`). It uses Cap'n Proto (`schema/session_checkpoint.capnp`) for binary checkpoint serialization, `blake3` for content-addressed payload spilling and zero-retention secret deduplication, and a generational memory arena that pins system instructions (Gen 0) while cycling transient turns through a ring buffer. The arena is not yet persisted to the checkpoint. See [CHANGELOG.md](CHANGELOG.md) for what is built today and what is planned next.
 
-For full operational agent guidelines, see [AGENTS.md](AGENTS.md).
+For operational guidelines and pre-commit protocols for AI agents working in this repository, see [AGENTS.md](AGENTS.md).
