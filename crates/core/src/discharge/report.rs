@@ -1,7 +1,7 @@
 use crate::checkin::TriageReceipt;
 use crate::detox::DetoxReceipt;
-use crate::reset::ResetReceipt;
 use crate::discharge::DischargeCertificate;
+use crate::reset::ResetReceipt;
 
 use std::fs::File;
 use std::io::Write;
@@ -47,7 +47,10 @@ pub fn generate_spa_report(
         token_reduction_percentage,
         developer_hours_saved,
         net_savings_usd,
-        spa_report_path: agent_ooo_dir.join("spa_report.md").to_string_lossy().to_string(),
+        spa_report_path: agent_ooo_dir
+            .join("spa_report.md")
+            .to_string_lossy()
+            .to_string(),
         execution_time_ms,
     };
 
@@ -69,10 +72,12 @@ status: {status}
 * **Raw Footprint:** {raw} bytes
 * **Sanitized Footprint:** {sanitized} bytes
 * **Secrets Masked:** {secrets}
-* **Large Payloads Spilled to Disk:** {spilled}
+* **Large Payloads Spilled to Disk:** {spilled} ({handles} CAS recall handles)
 
 ## 2. Structural Alignment (Reset)
-* **Error Loops Severed:** {loops} (loop severing not implemented yet)
+* **Error Loops Severed:** {loops}
+* **Tool Events Correlated:** {events}
+* **Negative Constraints Preserved:** {constraints}
 * **Environment Registers Extracted:** {registers}
 * **Zero-copy Cap'n Proto Size:** {capnp} bytes
 
@@ -85,13 +90,20 @@ status: {status}
 > "Reset, refresh, relax."
 "#,
         session_id = triage.session_id,
-        status = if canaries_passed { "DISCHARGED_HEALTHY" } else { "QUARANTINED" },
+        status = if canaries_passed {
+            "DISCHARGED_HEALTHY"
+        } else {
+            "QUARANTINED"
+        },
         canary_status = if canaries_passed { "PASS" } else { "FAIL" },
         raw = detox.raw_bytes,
         sanitized = detox.sanitized_bytes,
         secrets = detox.redactions_count,
         spilled = detox.spilled_payloads_count,
+        handles = detox.recall_handles.len(),
         loops = reset.severed_loops_count,
+        events = reset.event_stream_count,
+        constraints = reset.constraints_count,
         registers = reset.environment_registers_count,
         capnp = reset.checkpoint_capnp_bytes,
         reduction = token_reduction_percentage,

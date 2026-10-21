@@ -50,10 +50,10 @@ You can also book individual treatments (`checkin`, `detox`, `reset`, `discharge
 
 ### The 4-step treatment
 
-1. **Checkin (Intake & triage):** Admits the session to the spa, parses the transcript in a constant-memory stream, and calculates a context degradation "Rot Index."
-2. **Detox (Deep-tissue cleanse & credential hygiene):** Strips terminal ANSI escape codes, detects and masks leaked secrets (Anthropic, OpenAI, Google, GitHub, AWS, Bearer tokens, PEM private keys, and JWTs including decoded `role` claims such as `service_role`), and spills payloads over 512 KB into `blake3` content-addressed cold storage.
-3. **Reset (Structural alignment):** Captures host git registers (branch, commit, working directory, uncommitted files) and writes a zero-copy Cap'n Proto checkpoint alongside a portable JSON copy. Intent-hash loop severing is scheduled for v0.2.
-4. **Discharge (Exit exam & clean bill of health):** Verifies structural checkpoint integrity and issues a signed `.agent-ooo/spa_report.md` and `spa_report.json` summarizing detox results and an arena compaction preview.
+1. **Checkin (Intake & triage):** Admits the session to the spa, parses the transcript in a constant-memory stream (ignoring sidechain sub-queries), and calculates a context degradation "Rot Index."
+2. **Detox (Deep-tissue cleanse & credential hygiene):** Strips terminal ANSI escape codes, detects and masks leaked secrets (Anthropic, OpenAI, Google, GitHub, AWS, Bearer tokens, PEM private keys, and JWTs including decoded `role` claims such as `service_role`), and spills payloads over 512 KB into `blake3` content-addressed cold storage while recording CAS recall handles.
+3. **Reset (Structural alignment & loop severing):** Correlates tool calls and outcomes across turns (`EventStream`), severs recursive intent-hash error loops within a 6-event sliding window, extracts durable user directives (`NegativeConstraint`), captures host git registers, and locks session state into a zero-copy Cap'n Proto checkpoint (`LossManifest` included) alongside a portable JSON copy.
+4. **Discharge (Exit exam & clean bill of health):** Verifies structural checkpoint integrity (including 32-byte `blake3` event stream hashes) and issues a signed `.agent-ooo/spa_report.md` and `spa_report.json` summarizing detox results, severed loops, preserved constraints, and an arena compaction preview.
 
 ## Self-care via MCP (`agent-ooo-mcp`)
 
@@ -79,8 +79,8 @@ The MCP tool surface mirrors the CLI subcommands 1:1:
 * **`spa`:** Runs the full 4-step retreat (`checkin`, `detox`, `reset`, `discharge`) non-interactively and writes checkpoints and `spa_report.md` to `.agent-ooo/`.
 * **`checkin`:** Triages a session transcript (Rot Index, token count, tool call repetitions), or lists discovered sessions across Antigravity, Antigravity IDE, Claude Code, and Cursor when `list_sessions: true` is passed.
 * **`detox`:** Streams a session transcript (or every discovered session on the machine with `all_sessions: true`) in constant memory. Automatically prefers sibling `transcript_full.jsonl` files for Antigravity sessions so truncated tool outputs are still inspected. Hashes raw tokens with `blake3` and returns only masked previews (`first 7...last 4`), line numbers, and occurrence counts so raw credentials are never echoed back into the agent's context window.
-* **`reset`:** Extracts git environment registers and writes `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`.
-* **`discharge`:** Verifies structural checkpoint integrity and deserializes `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`, returning session metadata, git environment registers, and arena counts.
+* **`reset`:** Correlates tool events, severs recursive intent-hash loops, extracts user negative constraints and git environment registers, and writes `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`.
+* **`discharge`:** Verifies structural checkpoint integrity and deserializes `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`, returning session metadata, git environment registers, event stream count, preserved negative constraints, CAS recall handles, and arena counts.
 
 ## What gets written to `.agent-ooo/`
 

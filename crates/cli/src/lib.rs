@@ -1,11 +1,11 @@
 pub mod banner;
 
-use clap::{Parser, Subcommand};
-use colored::Colorize;
 use agent_ooo_core::checkin::{discovery, parser, triage};
 use agent_ooo_core::detox::pipeline as detox_pipeline;
-use agent_ooo_core::reset::pipeline as reset_pipeline;
 use agent_ooo_core::discharge::pipeline as discharge_pipeline;
+use agent_ooo_core::reset::pipeline as reset_pipeline;
+use clap::{Parser, Subcommand};
+use colored::Colorize;
 use std::env;
 use std::time::Instant;
 
@@ -70,77 +70,155 @@ pub fn run() -> anyhow::Result<()> {
 
     match &cli.command {
         Some(Commands::Checkin { transcript }) => {
-            println!("{} Admitting session for checkin triage...", "[CHECKIN]".bold().green());
-            let path = discovery::resolve_transcript_path(transcript.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
+            println!(
+                "{} Admitting session for checkin triage...",
+                "[CHECKIN]".bold().green()
+            );
+            let path = discovery::resolve_transcript_path(transcript.as_deref())
+                .map_err(|e| anyhow::anyhow!(e))?;
             let metrics = parser::parse_transcript(&path)?;
             let receipt = triage::calculate_triage(&path, metrics);
             println!("Session ID: {}", receipt.session_id);
             println!("Degradation Score: {:.2}/10.0", receipt.degradation_score);
         }
         Some(Commands::Detox { transcript }) => {
-            println!("{} Syntactic cleanse initiated...", "[DETOX]".bold().yellow());
-            let path = discovery::resolve_transcript_path(transcript.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
+            println!(
+                "{} Syntactic cleanse initiated...",
+                "[DETOX]".bold().yellow()
+            );
+            let path = discovery::resolve_transcript_path(transcript.as_deref())
+                .map_err(|e| anyhow::anyhow!(e))?;
             let current_dir = env::current_dir()?;
-            let (_, receipt) = detox_pipeline::execute_detox(&path, &current_dir).map_err(|e| anyhow::anyhow!(e))?;
+            let (_, receipt) = detox_pipeline::execute_detox(&path, &current_dir)
+                .map_err(|e| anyhow::anyhow!(e))?;
             println!("Sanitized Bytes: {}", receipt.sanitized_bytes);
         }
         Some(Commands::Reset { transcript }) => {
-            println!("{} Structural state alignment initiated...", "[RESET]".bold().blue());
-            let path = discovery::resolve_transcript_path(transcript.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
+            println!(
+                "{} Structural state alignment initiated...",
+                "[RESET]".bold().blue()
+            );
+            let path = discovery::resolve_transcript_path(transcript.as_deref())
+                .map_err(|e| anyhow::anyhow!(e))?;
             let current_dir = env::current_dir()?;
-            let (arena, _) = detox_pipeline::execute_detox(&path, &current_dir).map_err(|e| anyhow::anyhow!(e))?;
+            let (mut arena, detox_receipt) = detox_pipeline::execute_detox(&path, &current_dir)
+                .map_err(|e| anyhow::anyhow!(e))?;
             let session_id = discovery::session_id_for(&path);
-            let receipt = reset_pipeline::execute_reset(&session_id, &current_dir, &arena)?;
+            let receipt = reset_pipeline::execute_reset(
+                &session_id,
+                &current_dir,
+                &mut arena,
+                &detox_receipt,
+            )?;
+            println!(
+                "Severed Loops: {}, Constraints: {}, Tool Events: {}",
+                receipt.severed_loops_count, receipt.constraints_count, receipt.event_stream_count
+            );
             println!("Checkpoint size: {} bytes", receipt.checkpoint_capnp_bytes);
         }
         Some(Commands::Discharge { transcript: _ }) => {
-            println!("{} Clinical verification initiated...", "[DISCHARGE]".bold().magenta());
+            println!(
+                "{} Clinical verification initiated...",
+                "[DISCHARGE]".bold().magenta()
+            );
             println!("Please use `agent-ooo spa` to run the full pipeline.");
         }
         Some(Commands::Spa { transcript }) => {
-            println!("{} Starting The Spa Package (Steps 1 -> 4)...", "[SPA PACKAGE]".bold().cyan());
-            
+            println!(
+                "{} Starting The Spa Package (Steps 1 -> 4)...",
+                "[SPA PACKAGE]".bold().cyan()
+            );
+
             let start_time = Instant::now();
-            let path = discovery::resolve_transcript_path(transcript.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
+            let path = discovery::resolve_transcript_path(transcript.as_deref())
+                .map_err(|e| anyhow::anyhow!(e))?;
             println!("{} Discovered transcript: {}", "->".cyan(), path.display());
-            
+
             let current_dir = env::current_dir()?;
-            
+
             // 1. Checkin
             println!("\n{} Step 1: Checkin & Triage...", "=>".green());
             let metrics = parser::parse_transcript(&path)?;
             let triage_receipt = triage::calculate_triage(&path, metrics);
-            println!("   Score: {:.2}/10.0, Tokens: {}", triage_receipt.degradation_score, triage_receipt.total_input_tokens);
+            println!(
+                "   Score: {:.2}/10.0, Tokens: {}",
+                triage_receipt.degradation_score, triage_receipt.total_input_tokens
+            );
 
             // 2. Detox
             println!("\n{} Step 2: Syntactic Cleanse (Detox)...", "=>".yellow());
-            let (arena, detox_receipt) = detox_pipeline::execute_detox(&path, &current_dir).map_err(|e| anyhow::anyhow!(e))?;
-            println!("   Masked {} secrets, saved {} bytes.", detox_receipt.redactions_count, detox_receipt.raw_bytes.saturating_sub(detox_receipt.sanitized_bytes));
+            let (mut arena, detox_receipt) = detox_pipeline::execute_detox(&path, &current_dir)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!(
+                "   Masked {} secrets, saved {} bytes.",
+                detox_receipt.redactions_count,
+                detox_receipt
+                    .raw_bytes
+                    .saturating_sub(detox_receipt.sanitized_bytes)
+            );
 
             // 3. Reset
             println!("\n{} Step 3: Structural Alignment (Reset)...", "=>".blue());
             let session_id = discovery::session_id_for(&path);
-            let reset_receipt = reset_pipeline::execute_reset(&session_id, &current_dir, &arena)?;
-            println!("   Checkpoints saved. Zero-copy state locked.");
+            let reset_receipt = reset_pipeline::execute_reset(
+                &session_id,
+                &current_dir,
+                &mut arena,
+                &detox_receipt,
+            )?;
+            println!(
+                "   Severed {} loops, captured {} constraints. Zero-copy state locked.",
+                reset_receipt.severed_loops_count, reset_receipt.constraints_count
+            );
 
             // 4. Discharge
             println!("\n{} Step 4: Verification & Discharge...", "=>".magenta());
             // Measured before the report is written so spa_report.md and the terminal agree.
             let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
-            let cert = discharge_pipeline::execute_discharge(&current_dir, &triage_receipt, &detox_receipt, &reset_receipt, elapsed_ms)?;
-            
-            println!("\n{}", "=============================================".bold().cyan());
+            let cert = discharge_pipeline::execute_discharge(
+                &current_dir,
+                &triage_receipt,
+                &detox_receipt,
+                &reset_receipt,
+                elapsed_ms,
+            )?;
+
+            println!(
+                "\n{}",
+                "============================================="
+                    .bold()
+                    .cyan()
+            );
             println!("{} Spa Retreat Complete!", "★".yellow());
             println!("* Execution Time: {:.2} ms", cert.execution_time_ms);
-            println!("* Checkpoint Integrity: {}", if cert.canaries_passed { "PASS".green() } else { "FAIL".red() });
-            println!("* Token Reduction (Detox): {:.2}%", cert.token_reduction_percentage);
+            println!(
+                "* Checkpoint Integrity: {}",
+                if cert.canaries_passed {
+                    "PASS".green()
+                } else {
+                    "FAIL".red()
+                }
+            );
+            println!(
+                "* Token Reduction (Detox): {:.2}%",
+                cert.token_reduction_percentage
+            );
             println!("* Estimated Savings: ${:.4}", cert.net_savings_usd);
             println!("* Developer Hours Saved: {:.1}", cert.developer_hours_saved);
             println!("* Spa Report written to: {}", cert.spa_report_path);
-            println!("{}", "=============================================".bold().cyan());
+            println!(
+                "{}",
+                "============================================="
+                    .bold()
+                    .cyan()
+            );
         }
         Some(Commands::Watch { interval }) => {
-            println!("{} Background watchdog daemon active (interval: {}s)", "[WATCH]".bold().green(), interval);
+            println!(
+                "{} Background watchdog daemon active (interval: {}s)",
+                "[WATCH]".bold().green(),
+                interval
+            );
         }
         Some(Commands::Update) => {
             println!("{} Checking for updates...", "[UPDATE]".bold().cyan());
@@ -151,11 +229,15 @@ pub fn run() -> anyhow::Result<()> {
                 .show_download_progress(true)
                 .current_version(env!("CARGO_PKG_VERSION"))
                 .build()
-                .and_then(|update| update.update()) 
+                .and_then(|update| update.update())
             {
                 Ok(status) => {
                     if status.is_updated() {
-                        println!("{} Successfully updated to v{}", "★".yellow(), status.version());
+                        println!(
+                            "{} Successfully updated to v{}",
+                            "★".yellow(),
+                            status.version()
+                        );
                     } else {
                         println!("{} Already up to date (v{})", "★".green(), status.version());
                     }
@@ -166,7 +248,11 @@ pub fn run() -> anyhow::Result<()> {
             }
         }
         None => {
-            println!("Run '{}' or '{}' to begin.", "agent-ooo checkin".bold(), "agent-ooo spa".bold());
+            println!(
+                "Run '{}' or '{}' to begin.",
+                "agent-ooo checkin".bold(),
+                "agent-ooo spa".bold()
+            );
         }
     }
 

@@ -1,15 +1,20 @@
-use super::{ResetReceipt, registers, serializer};
+use super::{analyzer, registers, serializer, ResetReceipt};
 use crate::detox::arena::MemoryArena;
+use crate::detox::DetoxReceipt;
 use std::path::Path;
 
 /// Executes the reset step: severs loops, extracts environment state, writes checkpoints.
 pub fn execute_reset(
     session_id: &str,
     workspace_dir: &Path,
-    arena: &MemoryArena,
+    arena: &mut MemoryArena,
+    detox_receipt: &DetoxReceipt,
 ) -> Result<ResetReceipt, crate::OooError> {
-    // 1. Loop severing is not implemented yet (planned for v0.2). Report 0 rather than a simulated value.
-    let severed_loops_count = 0;
+    // 1. Analyze arena turns, extract tool events and negative constraints, and sever recursive loops
+    let analysis = analyzer::analyze_and_sever_arena(arena);
+    let severed_loops_count = analysis.severed_loops_count;
+    let event_stream_count = analysis.events.len();
+    let constraints_count = analysis.constraints.len();
 
     // 2. Extract registers
     let env_registers = registers::extract_registers(workspace_dir);
@@ -24,11 +29,20 @@ pub fn execute_reset(
     .count();
 
     // 3. Serialize
-    let (capnp_bytes, json_bytes) = serializer::write_checkpoints(workspace_dir, session_id, &env_registers, arena)?;
+    let (capnp_bytes, json_bytes) = serializer::write_checkpoints(
+        workspace_dir,
+        session_id,
+        &env_registers,
+        arena,
+        &analysis,
+        detox_receipt,
+    )?;
 
     Ok(ResetReceipt {
         severed_loops_count,
         environment_registers_count,
+        event_stream_count,
+        constraints_count,
         checkpoint_capnp_bytes: capnp_bytes,
         checkpoint_json_bytes: json_bytes,
     })

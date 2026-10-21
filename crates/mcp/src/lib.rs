@@ -366,10 +366,11 @@ fn execute_reset(args: &Value) -> anyhow::Result<Value> {
         None => env::current_dir()?,
     };
 
-    let (arena, _) =
+    let (mut arena, detox_receipt) =
         detox_pipeline::execute_detox(&path, &workspace_dir).map_err(|e| anyhow::anyhow!(e))?;
     let session_id = discovery::session_id_for(&path);
-    let receipt = reset_pipeline::execute_reset(&session_id, &workspace_dir, &arena)?;
+    let receipt =
+        reset_pipeline::execute_reset(&session_id, &workspace_dir, &mut arena, &detox_receipt)?;
 
     Ok(json!({
         "session_id": session_id,
@@ -399,11 +400,12 @@ fn execute_spa(args: &Value) -> anyhow::Result<Value> {
 
     let metrics = parser::parse_transcript(&path)?;
     let triage_receipt = triage::calculate_triage(&path, metrics);
-    let (arena, detox_receipt) =
+    let (mut arena, detox_receipt) =
         detox_pipeline::execute_detox(&path, &workspace_dir).map_err(|e| anyhow::anyhow!(e))?;
     let secrets = sanitizer::scan_transcript_secrets(&path)?;
     let session_id = discovery::session_id_for(&path);
-    let reset_receipt = reset_pipeline::execute_reset(&session_id, &workspace_dir, &arena)?;
+    let reset_receipt =
+        reset_pipeline::execute_reset(&session_id, &workspace_dir, &mut arena, &detox_receipt)?;
     let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
     let discharge_cert = discharge_pipeline::execute_discharge(
         &workspace_dir,

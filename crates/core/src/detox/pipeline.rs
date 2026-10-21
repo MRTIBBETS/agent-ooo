@@ -1,6 +1,6 @@
 use super::arena::MemoryArena;
 use super::sanitizer::sanitize_content;
-use super::spillover::manage_spillover;
+use super::spillover::manage_spillover_with_handle;
 use super::DetoxReceipt;
 
 use serde_json::Value;
@@ -9,26 +9,51 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+const MAX_RECALL_HANDLES: usize = 256;
+
+fn push_recall_handle(handles: &mut Vec<String>, handle: String) {
+    if !handles.contains(&handle) {
+        if handles.len() >= MAX_RECALL_HANDLES {
+            handles.remove(0);
+        }
+        handles.push(handle);
+    }
+}
+
 /// Recursively sanitizes Claude Code style content: a plain string, or an array of
 /// blocks whose `text`, `thinking`, or nested `content` fields carry strings.
 /// Returns (redactions, net change in string length).
-fn sanitize_nested(value: &mut Value) -> (usize, i64) {
+fn sanitize_nested(
+    value: &mut Value,
+    workspace_dir: &Path,
+    receipt: &mut DetoxReceipt,
+) -> (usize, i64) {
     match value {
         Value::String(s) => {
+            let original_len = s.len() as i64;
             let (clean, red) = sanitize_content(s);
-            let d = clean.len() as i64 - s.len() as i64;
-            *s = clean;
+            let final_str = match manage_spillover_with_handle(&clean, workspace_dir) {
+                Ok((spilled_str, Some(handle))) => {
+                    receipt.spilled_payloads_count += 1;
+                    push_recall_handle(&mut receipt.recall_handles, handle);
+                    spilled_str
+                }
+                Ok((unchanged, None)) => unchanged,
+                Err(_) => clean,
+            };
+            let d = final_str.len() as i64 - original_len;
+            *s = final_str;
             (red, d)
         }
         Value::Array(items) => items.iter_mut().fold((0, 0), |(r, d), item| {
-            let (r2, d2) = sanitize_nested(item);
+            let (r2, d2) = sanitize_nested(item, workspace_dir, receipt);
             (r + r2, d + d2)
         }),
         Value::Object(map) => {
             let mut totals = (0, 0);
             for key in ["text", "thinking", "content"] {
                 if let Some(field) = map.get_mut(key) {
-                    let (r, d) = sanitize_nested(field);
+                    let (r, d) = sanitize_nested(field, workspace_dir, receipt);
                     totals.0 += r;
                     totals.1 += d;
                 }
@@ -51,19 +76,26 @@ pub fn execute_detox(
     let mut arena = MemoryArena::new(100);
     // Sanitized byte size of each transient item, in the same order as the arena ring buffer
     let mut transient_sizes: VecDeque<usize> = VecDeque::with_capacity(101);
-    
+
     let mut receipt = DetoxReceipt {
         raw_bytes: 0,
         sanitized_bytes: 0,
         evicted_tokens: 0,
+        evicted_bytes: 0,
         spilled_payloads_count: 0,
         redactions_count: 0,
+        recall_handles: Vec::new(),
     };
 
     for line in reader.lines() {
         let line = line.map_err(|e| e.to_string())?;
 
         if let Ok(mut value) = serde_json::from_str::<Value>(&line) {
+            // Skip Claude Code sidechain sub-queries so they do not pollute the main session
+            if value.get("isSidechain").and_then(|v| v.as_bool()) == Some(true) {
+                continue;
+            }
+
             // Count raw bytes only for parsed lines so raw and sanitized totals are comparable
             receipt.raw_bytes += line.len();
             // Check if it's a system prompt to pin it
@@ -88,25 +120,29 @@ pub fn execute_detox(
                     receipt.redactions_count += red_count;
 
                     // Check for spillover (large tool outputs)
-                    let final_str = match manage_spillover(&sanitized_str, workspace_dir) {
-                        Ok((final_str, spilled)) => {
-                            if spilled {
+                    let final_str =
+                        match manage_spillover_with_handle(&sanitized_str, workspace_dir) {
+                            Ok((final_str, Some(handle))) => {
                                 receipt.spilled_payloads_count += 1;
+                                push_recall_handle(&mut receipt.recall_handles, handle);
+                                final_str
                             }
-                            final_str
-                        }
-                        Err(e) => {
-                            eprintln!("Warning: Spillover failed - {}", e);
-                            sanitized_str
-                        }
-                    };
+                            Ok((final_str, None)) => final_str,
+                            Err(e) => {
+                                eprintln!("Warning: Spillover failed - {}", e);
+                                sanitized_str
+                            }
+                        };
                     delta += final_str.len() as i64 - original_len;
                     *content_val = Value::String(final_str);
                 }
             }
 
             // Also check tool call payloads if they are embedded differently
-            if let Some(tool_responses) = value.get_mut("tool_responses").and_then(|v| v.as_array_mut()) {
+            if let Some(tool_responses) = value
+                .get_mut("tool_responses")
+                .and_then(|v| v.as_array_mut())
+            {
                 for resp in tool_responses {
                     if let Some(output_val) = resp.get_mut("output") {
                         if let Some(output_str) = output_val.as_str() {
@@ -114,8 +150,13 @@ pub fn execute_detox(
                             let (sanitized_str, red_count) = sanitize_content(output_str);
                             receipt.redactions_count += red_count;
 
-                            if let Ok((final_str, spilled)) = manage_spillover(&sanitized_str, workspace_dir) {
-                                if spilled { receipt.spilled_payloads_count += 1; }
+                            if let Ok((final_str, maybe_handle)) =
+                                manage_spillover_with_handle(&sanitized_str, workspace_dir)
+                            {
+                                if let Some(handle) = maybe_handle {
+                                    receipt.spilled_payloads_count += 1;
+                                    push_recall_handle(&mut receipt.recall_handles, handle);
+                                }
                                 delta += final_str.len() as i64 - original_len;
                                 *output_val = Value::String(final_str);
                             }
@@ -125,8 +166,10 @@ pub fn execute_detox(
             }
 
             // Claude Code nests text under message.content (string or array of blocks)
-            if let Some(message_content) = value.get_mut("message").and_then(|m| m.get_mut("content")) {
-                let (red_count, d) = sanitize_nested(message_content);
+            if let Some(message_content) =
+                value.get_mut("message").and_then(|m| m.get_mut("content"))
+            {
+                let (red_count, d) = sanitize_nested(message_content, workspace_dir, &mut receipt);
                 receipt.redactions_count += red_count;
                 delta += d;
             }
@@ -143,6 +186,7 @@ pub fn execute_detox(
                 transient_sizes.push_back(line_sanitized);
                 if arena.push_transient(value).is_some() {
                     let evicted_size = transient_sizes.pop_front().unwrap_or(0);
+                    receipt.evicted_bytes += evicted_size as u64;
                     receipt.evicted_tokens += evicted_size / 4; // Naive token estimation
                 }
             }
@@ -161,7 +205,11 @@ mod tests {
     #[test]
     fn escaped_characters_are_not_counted_as_savings() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, r#"{{"source":"MODEL","content":"\u003cdiv\u003e plain html \u003c/div\u003e"}}"#).unwrap();
+        writeln!(
+            file,
+            r#"{{"source":"MODEL","content":"\u003cdiv\u003e plain html \u003c/div\u003e"}}"#
+        )
+        .unwrap();
         let dir = TempDir::new().unwrap();
 
         let (_, receipt) = execute_detox(file.path(), dir.path()).unwrap();
@@ -181,5 +229,27 @@ mod tests {
         // Unparseable lines are excluded from both totals
         assert!(receipt.raw_bytes > 0);
         assert!(receipt.sanitized_bytes < receipt.raw_bytes + "[REDACTED_SECRET]".len());
+    }
+
+    #[test]
+    fn skips_sidechain_and_tracks_recall_handles_and_evicted_bytes() {
+        let mut file = NamedTempFile::new().unwrap();
+        // Sidechain line should be skipped completely
+        writeln!(
+            file,
+            r#"{{"isSidechain":true,"source":"USER","content":"sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx"}}"#
+        )
+        .unwrap();
+        // Oversized payload (>512 KB) should spill and populate recall_handles
+        let big = "a".repeat(512 * 1024 + 64);
+        writeln!(file, r#"{{"source":"MODEL","content":"{big}"}}"#).unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let (arena, receipt) = execute_detox(file.path(), dir.path()).unwrap();
+        assert_eq!(receipt.redactions_count, 0);
+        assert_eq!(arena.transient().len(), 1);
+        assert_eq!(receipt.spilled_payloads_count, 1);
+        assert_eq!(receipt.recall_handles.len(), 1);
+        assert!(receipt.recall_handles[0].ends_with(".bin"));
     }
 }

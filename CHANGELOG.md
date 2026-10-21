@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 > **AI Engineering Ledger:** This changelog explicitly tracks the AI models, orchestration runtimes, and core dependencies utilized to author milestones, providing an auditable trail of generative contributions.
 
+## [Unreleased]
+
+### Added
+- **Phase 1 of v0.2: Cap'n Proto State Hydration & Deterministic Intent-Hash Loop Severing:**
+  - Extended `DetoxReceipt` and `detox::spillover` (`manage_spillover_with_handle`) to track exact `evicted_bytes` from the `MemoryArena` ring buffer and up to 256 bounded `<blake3>.bin` CAS `recall_handles`, while filtering `isSidechain: true` turns in `checkin::parser` and `detox::pipeline`.
+  - Created `crates/core/src/reset/analyzer.rs` to correlate Claude Code (`tool_use` / `tool_result`) and Antigravity (`tool_calls` / `tool_responses`) invocations across turns using a bounded 256-entry lookback queue, producing `ToolEventRecord` entries with normalized `blake3` argument and stdout hashes.
+  - Implemented deterministic intent-hash loop severing across a 6-event sliding window (`MemoryArena::sever_loops`), collapsing intermediate duplicate retry turns while preserving the initial attempt and final resolution/failure.
+  - Added user directive extraction (`ConstraintRecord`) to capture boundary rules (`never`, `do not`, `don't`, `must not`, `always`, `under no circumstances`, `stop doing`) from user turns into `SessionCheckpoint.constraintLedger` (deduplicated via `blake3` and capped at 64 entries of up to 280 chars).
+  - Hydrated `EventStream`, `NegativeConstraint`, and `LossManifest` in `reset::serializer::write_checkpoints` and `inspect_checkpoint` (both `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`), and updated `discharge::report::generate_spa_report` to report severed loops, correlated tool events, preserved constraints, and CAS recall handles.
+  - *Self-Review Fix:* Bounded volatile regex normalization in `analyzer::hash_normalized` to a UTF-8-safe 16 KB prefix (`bounded_utf8_prefix`) to avoid multi-hundred-kilobyte string allocations on large tool outputs, and added 32-byte `blake3` digest slice verification on `EventStream` records inside `inspect_checkpoint`.
+  - *Context:* Authored by Antigravity (Gemini 4 Argon Medium) using Rust 1.99.1 and Cap'n Proto 1.5.0.
+
 ## [0.1.7] - 2026-10-19
 
 ### Added

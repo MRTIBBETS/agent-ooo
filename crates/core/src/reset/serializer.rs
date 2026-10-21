@@ -1,4 +1,6 @@
 use crate::detox::arena::MemoryArena;
+use crate::detox::DetoxReceipt;
+use crate::reset::analyzer::ResetAnalysis;
 use crate::reset::registers::EnvironmentRegisters;
 use crate::schema::session_checkpoint;
 use capnp::message::{Builder, ReaderOptions};
@@ -27,6 +29,10 @@ pub struct CheckpointInspection {
     pub arena_gen0_count: usize,
     pub arena_transient_count: usize,
     pub evicted_bytes: u64,
+    pub event_stream_count: usize,
+    pub constraints: Vec<String>,
+    pub recall_handles: Vec<String>,
+    pub severed_loops_count: usize,
 }
 
 pub fn write_checkpoints(
@@ -34,6 +40,8 @@ pub fn write_checkpoints(
     session_id: &str,
     registers: &EnvironmentRegisters,
     arena: &MemoryArena,
+    analysis: &ResetAnalysis,
+    detox_receipt: &DetoxReceipt,
 ) -> Result<(usize, usize), crate::OooError> {
     let agent_ooo_dir = base_dir.join(".agent-ooo");
     std::fs::create_dir_all(&agent_ooo_dir)?;
@@ -76,9 +84,38 @@ pub fn write_checkpoints(
     r4.set_value(registers.modified_files.join(","));
     r4.set_origin(crate::schema::TrustOrigin::System);
 
-    // Evicted info placeholder (from arena size logic)
+    // EventStream
+    let mut event_list = checkpoint
+        .reborrow()
+        .init_event_stream(analysis.events.len() as u32);
+    for (i, record) in analysis.events.iter().enumerate() {
+        let mut ev = event_list.reborrow().get(i as u32);
+        ev.set_tool_call_id(&record.tool_call_id);
+        ev.set_tool_name(&record.tool_name);
+        ev.set_args_hash(&record.args_hash[..]);
+        ev.set_exit_code(record.exit_code);
+        ev.set_stdout_hash(&record.stdout_hash[..]);
+        ev.set_timestamp(record.timestamp);
+        ev.set_origin(record.origin);
+    }
+
+    // ConstraintLedger
+    let mut constraint_list = checkpoint
+        .reborrow()
+        .init_constraint_ledger(analysis.constraints.len() as u32);
+    for (i, c) in analysis.constraints.iter().enumerate() {
+        let mut entry = constraint_list.reborrow().get(i as u32);
+        entry.set_constraint(&c.constraint);
+        entry.set_invalidation_rule(&c.invalidation_rule);
+    }
+
+    // LossManifest
     let mut loss = checkpoint.reborrow().init_loss_manifest();
-    loss.set_evicted_bytes(0); // We would populate from detox receipt in full logic
+    loss.set_evicted_bytes(detox_receipt.evicted_bytes);
+    let mut handles = loss.init_recall_handles(detox_receipt.recall_handles.len() as u32);
+    for (i, handle) in detox_receipt.recall_handles.iter().enumerate() {
+        handles.set(i as u32, handle.as_str());
+    }
 
     let capnp_path = agent_ooo_dir.join("checkpoint.capnp");
     let mut capnp_file = File::create(&capnp_path)?;
@@ -86,9 +123,22 @@ pub fn write_checkpoints(
     let capnp_bytes = capnp_file.metadata()?.len() as usize;
 
     // 2. JSON Checkpoint
+    let constraint_strings: Vec<&str> = analysis
+        .constraints
+        .iter()
+        .map(|c| c.constraint.as_str())
+        .collect();
+
     let json_val = serde_json::json!({
         "session_id": session_id,
         "timestamp": timestamp,
+        "severed_loops_count": analysis.severed_loops_count,
+        "event_stream_count": analysis.events.len(),
+        "constraints": constraint_strings,
+        "loss_manifest": {
+            "evicted_bytes": detox_receipt.evicted_bytes,
+            "recall_handles": detox_receipt.recall_handles,
+        },
         "registers": {
             "git_branch": registers.git_branch,
             "git_commit": registers.git_commit,
@@ -163,7 +213,44 @@ pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate
         registers.push(RegisterSnapshot { key, value, origin });
     }
 
-    let evicted_bytes = root.get_loss_manifest()?.get_evicted_bytes();
+    let event_stream = root.get_event_stream()?;
+    let event_stream_count = event_stream.len() as usize;
+    let mut event_hashes_valid = true;
+    for ev in event_stream.iter() {
+        let _ = ev
+            .get_tool_call_id()?
+            .to_str()
+            .map_err(|e| crate::OooError::General(format!("Invalid UTF-8 in tool_call_id: {e}")))?;
+        let _ = ev
+            .get_tool_name()?
+            .to_str()
+            .map_err(|e| crate::OooError::General(format!("Invalid UTF-8 in tool_name: {e}")))?;
+        if ev.get_args_hash()?.len() != 32 || ev.get_stdout_hash()?.len() != 32 {
+            event_hashes_valid = false;
+        }
+    }
+
+    let mut constraints = Vec::new();
+    for entry in root.get_constraint_ledger()?.iter() {
+        let text = entry
+            .get_constraint()?
+            .to_str()
+            .map_err(|e| crate::OooError::General(format!("Invalid UTF-8 in constraint: {e}")))?
+            .to_string();
+        constraints.push(text);
+    }
+
+    let loss_manifest = root.get_loss_manifest()?;
+    let evicted_bytes = loss_manifest.get_evicted_bytes();
+    let mut recall_handles = Vec::new();
+    for handle in loss_manifest.get_recall_handles()?.iter() {
+        let h = handle
+            .map_err(crate::OooError::Capnp)?
+            .to_str()
+            .map_err(|e| crate::OooError::General(format!("Invalid UTF-8 in recall handle: {e}")))?
+            .to_string();
+        recall_handles.push(h);
+    }
 
     let json_str = std::fs::read_to_string(&json_path)?;
     let json_val: serde_json::Value = serde_json::from_str(&json_str)?;
@@ -172,6 +259,10 @@ pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate
         .get("session_id")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let severed_loops_count = json_val
+        .get("severed_loops_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
     let arena_gen0_count = json_val
         .get("arena")
         .and_then(|a| a.get("gen0_count"))
@@ -185,7 +276,8 @@ pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate
 
     let canary_ok =
         crate::discharge::canary::verify_behavioral_canary(&agent_ooo_dir).unwrap_or(false);
-    let integrity_passed = canary_ok && !session_id.is_empty() && session_id == json_session_id;
+    let integrity_passed =
+        canary_ok && event_hashes_valid && !session_id.is_empty() && session_id == json_session_id;
 
     Ok(CheckpointInspection {
         integrity_passed,
@@ -197,12 +289,18 @@ pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate
         arena_gen0_count,
         arena_transient_count,
         evicted_bytes,
+        event_stream_count,
+        constraints,
+        recall_handles,
+        severed_loops_count,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reset::analyzer::{ConstraintRecord, ToolEventRecord};
+    use crate::schema::TrustOrigin;
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -219,8 +317,43 @@ mod tests {
         arena.pin_gen0(json!({"source": "SYSTEM", "content": "rule"}));
         arena.push_transient(json!({"source": "USER", "content": "hi"}));
 
-        let (capnp_len, json_len) =
-            write_checkpoints(dir.path(), "sess-42", &regs, &arena).unwrap();
+        let analysis = ResetAnalysis {
+            events: vec![ToolEventRecord {
+                tool_call_id: "toolu_1".to_string(),
+                tool_name: "Bash".to_string(),
+                args_hash: [1u8; 32],
+                exit_code: 0,
+                stdout_hash: [2u8; 32],
+                timestamp: 100,
+                origin: TrustOrigin::Tool,
+            }],
+            constraints: vec![ConstraintRecord {
+                constraint: "Never use unwrap() in core".to_string(),
+                invalidation_rule: "user_override".to_string(),
+            }],
+            severed_loops_count: 1,
+            pruned_turns_count: 2,
+        };
+
+        let detox_receipt = DetoxReceipt {
+            raw_bytes: 1000,
+            sanitized_bytes: 900,
+            evicted_tokens: 50,
+            evicted_bytes: 200,
+            spilled_payloads_count: 1,
+            redactions_count: 0,
+            recall_handles: vec!["abcdef123456.bin".to_string()],
+        };
+
+        let (capnp_len, json_len) = write_checkpoints(
+            dir.path(),
+            "sess-42",
+            &regs,
+            &arena,
+            &analysis,
+            &detox_receipt,
+        )
+        .unwrap();
         assert!(capnp_len > 0);
         assert!(json_len > 0);
 
@@ -234,5 +367,16 @@ mod tests {
         assert_eq!(inspection.registers.len(), 4);
         assert_eq!(inspection.registers[0].key, "git_branch");
         assert_eq!(inspection.registers[0].value, "main");
+        assert_eq!(inspection.event_stream_count, 1);
+        assert_eq!(
+            inspection.constraints,
+            vec!["Never use unwrap() in core".to_string()]
+        );
+        assert_eq!(inspection.evicted_bytes, 200);
+        assert_eq!(
+            inspection.recall_handles,
+            vec!["abcdef123456.bin".to_string()]
+        );
+        assert_eq!(inspection.severed_loops_count, 1);
     }
 }

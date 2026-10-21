@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::Path;
+use std::process::Command;
 
 #[derive(Debug, Default, Clone)]
 pub struct EnvironmentRegisters {
@@ -20,7 +20,8 @@ pub fn extract_registers(workspace_dir: &Path) -> EnvironmentRegisters {
         .arg("--abbrev-ref")
         .arg("HEAD")
         .current_dir(workspace_dir)
-        .output() {
+        .output()
+    {
         if output.status.success() {
             registers.git_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
         }
@@ -30,7 +31,8 @@ pub fn extract_registers(workspace_dir: &Path) -> EnvironmentRegisters {
         .arg("rev-parse")
         .arg("HEAD")
         .current_dir(workspace_dir)
-        .output() {
+        .output()
+    {
         if output.status.success() {
             registers.git_commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
         }
@@ -40,7 +42,8 @@ pub fn extract_registers(workspace_dir: &Path) -> EnvironmentRegisters {
         .arg("diff")
         .arg("--name-only")
         .current_dir(workspace_dir)
-        .output() {
+        .output()
+    {
         if output.status.success() {
             let files_str = String::from_utf8_lossy(&output.stdout);
             registers.modified_files = files_str

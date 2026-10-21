@@ -20,8 +20,16 @@ fn content_text_len(content: &Value) -> usize {
         Value::Array(blocks) => blocks
             .iter()
             .map(|b| {
-                let text = b.get("text").and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0);
-                let thinking = b.get("thinking").and_then(|v| v.as_str()).map(|s| s.len()).unwrap_or(0);
+                let text = b
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.len())
+                    .unwrap_or(0);
+                let thinking = b
+                    .get("thinking")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.len())
+                    .unwrap_or(0);
                 let nested = b.get("content").map(content_text_len).unwrap_or(0);
                 let input = b.get("input").map(|v| v.to_string().len()).unwrap_or(0);
                 text + thinking + nested + input
@@ -46,13 +54,16 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
             continue;
         }
 
-        metrics.total_turns += 1;
-
         if let Ok(value) = serde_json::from_str::<Value>(&line) {
+            if value.get("isSidechain").and_then(|v| v.as_bool()) == Some(true) {
+                continue;
+            }
+            metrics.total_turns += 1;
             let message = value.get("message").filter(|m| m.is_object());
 
             // Count roles (e.g., source: "USER", "MODEL", "SYSTEM" or role: "user", "assistant")
-            let role = value.get("source")
+            let role = value
+                .get("source")
                 .or_else(|| value.get("role"))
                 .or_else(|| message.and_then(|m| m.get("role")))
                 .or_else(|| value.get("type"))
@@ -68,7 +79,9 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
                 for tool_call in tool_calls {
                     if let Some(tool_name) = tool_call.get("name").and_then(|v| v.as_str()) {
                         metrics.tool_calls.push(tool_name.to_string());
-                    } else if let Some(function) = tool_call.get("function").and_then(|v| v.as_object()) {
+                    } else if let Some(function) =
+                        tool_call.get("function").and_then(|v| v.as_object())
+                    {
                         if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
                             metrics.tool_calls.push(name.to_string());
                         }
@@ -77,7 +90,10 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
             }
 
             // Check Claude Code format `message.content[] { type: "tool_use", name }`
-            if let Some(blocks) = message.and_then(|m| m.get("content")).and_then(|c| c.as_array()) {
+            if let Some(blocks) = message
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array())
+            {
                 for block in blocks {
                     if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
                         if let Some(name) = block.get("name").and_then(|v| v.as_str()) {
@@ -90,9 +106,14 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
             // Naive token estimation: characters / 4
             let content_len = match value.get("content").and_then(|v| v.as_str()) {
                 Some(content) => content.len(),
-                None => message.and_then(|m| m.get("content")).map(content_text_len).unwrap_or(0),
+                None => message
+                    .and_then(|m| m.get("content"))
+                    .map(content_text_len)
+                    .unwrap_or(0),
             };
             metrics.total_input_tokens += content_len / 4;
+        } else {
+            metrics.total_turns += 1;
         }
     }
 
@@ -109,7 +130,11 @@ mod tests {
     fn test_parse_transcript() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, r#"{{"source": "USER", "content": "Hello"}}"#).unwrap();
-        writeln!(file, r#"{{"source": "MODEL", "tool_calls": [{{"name": "test_tool"}}]}}"#).unwrap();
+        writeln!(
+            file,
+            r#"{{"source": "MODEL", "tool_calls": [{{"name": "test_tool"}}]}}"#
+        )
+        .unwrap();
 
         let metrics = parse_transcript(file.path()).unwrap();
         assert_eq!(metrics.total_turns, 2);
@@ -120,8 +145,16 @@ mod tests {
     #[test]
     fn test_parse_claude_code_transcript() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, r#"{{"type":"file-history-snapshot","snapshot":{{}}}}"#).unwrap();
-        writeln!(file, r#"{{"type":"user","message":{{"role":"user","content":"list the files please"}}}}"#).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"file-history-snapshot","snapshot":{{}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"user","message":{{"role":"user","content":"list the files please"}}}}"#
+        )
+        .unwrap();
         writeln!(file, r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"Sure."}},{{"type":"tool_use","id":"t1","name":"Bash","input":{{"command":"ls"}}}}]}}}}"#).unwrap();
         writeln!(file, r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":"a.txt b.txt c.txt d.txt"}}]}}}}"#).unwrap();
 
