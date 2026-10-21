@@ -51,22 +51,40 @@ pub enum Commands {
         /// Optional path to a specific transcript file (.jsonl)
         transcript: Option<String>,
     },
-    /// Background watchdog monitoring active sessions.
+    /// Stream a secret-scrubbed session transcript to stdout or a file.
     #[command(display_order = 6)]
+    Export {
+        /// Optional path to a specific transcript file (.jsonl)
+        transcript: Option<String>,
+        /// Export format: jsonl, normalized, or handoff
+        #[arg(short, long, default_value = "normalized")]
+        format: String,
+        /// Optional cap on the number of recent transient turns exported (System Gen 0 turns are always retained)
+        #[arg(short, long)]
+        max_turns: Option<usize>,
+        /// Optional output file path. Writes directly to stdout when omitted.
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Background watchdog monitoring active sessions.
+    #[command(display_order = 7)]
     Watch {
         /// Polling interval in seconds
         #[arg(short, long, default_value_t = 10)]
         interval: u64,
     },
     /// Update agent-ooo to the latest version.
-    #[command(display_order = 7)]
+    #[command(display_order = 8)]
     Update,
 }
 
 pub fn run() -> anyhow::Result<()> {
-    banner::print_banner();
-
     let cli = Cli::parse();
+
+    let quiet_stdout = matches!(&cli.command, Some(Commands::Export { output: None, .. }));
+    if !quiet_stdout {
+        banner::print_banner();
+    }
 
     match &cli.command {
         Some(Commands::Checkin { transcript }) => {
@@ -79,7 +97,19 @@ pub fn run() -> anyhow::Result<()> {
             let metrics = parser::parse_transcript(&path)?;
             let receipt = triage::calculate_triage(&path, metrics);
             println!("Session ID: {}", receipt.session_id);
-            println!("Degradation Score: {:.2}/10.0", receipt.degradation_score);
+            println!(
+                "Guest Condition: {} | Rot Index: {:.2}/10.0",
+                receipt.condition.as_str().bold(),
+                receipt.degradation_score
+            );
+            println!(
+                "Harness: {} ({}) | Turns: {} | Tool Calls: {} ({} failed)",
+                receipt.vitals.agent_harness,
+                receipt.vitals.model_id,
+                receipt.vitals.total_turns,
+                receipt.vitals.total_tool_calls,
+                receipt.vitals.failed_tool_calls
+            );
         }
         Some(Commands::Detox { transcript }) => {
             println!(
@@ -116,12 +146,95 @@ pub fn run() -> anyhow::Result<()> {
             );
             println!("Checkpoint size: {} bytes", receipt.checkpoint_capnp_bytes);
         }
-        Some(Commands::Discharge { transcript: _ }) => {
+        Some(Commands::Discharge { transcript }) => {
             println!(
                 "{} Clinical verification initiated...",
                 "[DISCHARGE]".bold().magenta()
             );
-            println!("Please use `agent-ooo spa` to run the full pipeline.");
+            let target_dir = match transcript.as_deref() {
+                Some(p) => std::path::PathBuf::from(p),
+                None => env::current_dir()?,
+            };
+            let inspection = agent_ooo_core::reset::serializer::inspect_checkpoint(&target_dir)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!("Session ID: {}", inspection.session_id);
+            println!(
+                "Checkpoint Integrity: {}",
+                if inspection.integrity_passed {
+                    "PASS".green()
+                } else {
+                    "FAIL".red()
+                }
+            );
+            println!(
+                "Cap'n Proto: {} bytes | JSON: {} bytes | Events: {} | Constraints: {}",
+                inspection.checkpoint_capnp_bytes,
+                inspection.checkpoint_json_bytes,
+                inspection.event_stream_count,
+                inspection.constraints.len()
+            );
+            for finding in &inspection.canary_report.findings {
+                let badge = match finding.status {
+                    agent_ooo_core::discharge::canary::CanaryStatus::Pass => "[PASS]".green(),
+                    agent_ooo_core::discharge::canary::CanaryStatus::Warn => "[WARN]".yellow(),
+                    agent_ooo_core::discharge::canary::CanaryStatus::Fail => "[FAIL]".red(),
+                };
+                println!("  {} {}: {}", badge, finding.code.bold(), finding.message);
+            }
+        }
+        Some(Commands::Export {
+            transcript,
+            format,
+            max_turns,
+            output,
+        }) => {
+            let export_format = agent_ooo_core::detox::exporter::ExportFormat::parse_label(format)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let current_dir = env::current_dir()?;
+
+            if let Some(out_path) = output {
+                println!(
+                    "{} Streaming sanitized transcript export...",
+                    "[EXPORT]".bold().cyan()
+                );
+                let path = discovery::resolve_transcript_path(transcript.as_deref())
+                    .map_err(|e| anyhow::anyhow!(e))?;
+                let mut out_file = std::fs::File::create(out_path)?;
+                let receipt = agent_ooo_core::detox::exporter::export_transcript(
+                    &path,
+                    &current_dir,
+                    export_format,
+                    *max_turns,
+                    &mut out_file,
+                )?;
+                println!(
+                    "Exported {} lines ({} bytes) to {} [masked {} secret(s), spilled {} payload(s)]",
+                    receipt.lines_exported,
+                    receipt.bytes_written,
+                    out_path,
+                    receipt.redactions_count,
+                    receipt.spilled_payloads_count
+                );
+            } else {
+                let path = discovery::resolve_transcript_non_interactive(transcript.as_deref())
+                    .map_err(|e| anyhow::anyhow!(e))?;
+                let stdout = std::io::stdout();
+                let mut handle = stdout.lock();
+                if let Err(err) = agent_ooo_core::detox::exporter::export_transcript(
+                    &path,
+                    &current_dir,
+                    export_format,
+                    *max_turns,
+                    &mut handle,
+                ) {
+                    if let agent_ooo_core::OooError::Io(ref io_err) = err {
+                        if io_err.kind() == std::io::ErrorKind::BrokenPipe {
+                            return Ok(());
+                        }
+                    }
+                    return Err(err.into());
+                }
+            }
         }
         Some(Commands::Spa { transcript }) => {
             println!(
@@ -141,8 +254,10 @@ pub fn run() -> anyhow::Result<()> {
             let metrics = parser::parse_transcript(&path)?;
             let triage_receipt = triage::calculate_triage(&path, metrics);
             println!(
-                "   Score: {:.2}/10.0, Tokens: {}",
-                triage_receipt.degradation_score, triage_receipt.total_input_tokens
+                "   Condition: {}, Rot Index: {:.2}/10.0, Tokens: {}",
+                triage_receipt.condition.as_str(),
+                triage_receipt.degradation_score,
+                triage_receipt.total_input_tokens
             );
 
             // 2. Detox
@@ -190,6 +305,7 @@ pub fn run() -> anyhow::Result<()> {
                     .cyan()
             );
             println!("{} Spa Retreat Complete!", "★".yellow());
+            println!("* Guest Condition: {}", cert.status.as_str().bold());
             println!("* Execution Time: {:.2} ms", cert.execution_time_ms);
             println!(
                 "* Checkpoint Integrity: {}",
@@ -199,6 +315,12 @@ pub fn run() -> anyhow::Result<()> {
                     "FAIL".red()
                 }
             );
+            let behavioral_label = match cert.canary_report.behavioral_status {
+                agent_ooo_core::discharge::canary::CanaryStatus::Pass => "PASS".green(),
+                agent_ooo_core::discharge::canary::CanaryStatus::Warn => "WARN".yellow(),
+                agent_ooo_core::discharge::canary::CanaryStatus::Fail => "FAIL".red(),
+            };
+            println!("* Behavioral Canaries: {}", behavioral_label);
             println!(
                 "* Token Reduction (Detox): {:.2}%",
                 cert.token_reduction_percentage

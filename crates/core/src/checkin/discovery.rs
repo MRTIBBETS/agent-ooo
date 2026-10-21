@@ -144,6 +144,22 @@ pub fn session_id_for(path: &Path) -> String {
         .unwrap_or_else(|| "unknown_session".to_string())
 }
 
+/// Identifies the originating agent harness from a transcript path.
+pub fn agent_harness_for(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if s.contains("antigravity-ide") {
+        "Antigravity IDE".to_string()
+    } else if s.contains("antigravity") || s.contains(".system_generated") {
+        "Antigravity".to_string()
+    } else if s.contains(".claude") {
+        "Claude Code".to_string()
+    } else if s.contains(".cursor") {
+        "Cursor".to_string()
+    } else {
+        "Generic JSONL".to_string()
+    }
+}
+
 /// Prefers the untruncated sibling `transcript_full.jsonl` when `path` points to `transcript.jsonl`
 /// and `transcript_full.jsonl` exists in the same directory. Also resolves session directories
 /// directly to their nested transcript file.

@@ -15,12 +15,20 @@ pub fn execute_discharge(
     reset: &ResetReceipt,
     execution_time_ms: f64,
 ) -> Result<DischargeCertificate, crate::OooError> {
-    
     let agent_ooo_dir = base_dir.join(".agent-ooo");
-    let canaries_passed = canary::verify_behavioral_canary(&agent_ooo_dir)
-        .unwrap_or(false);
+    let canary_report = canary::evaluate_canaries(base_dir, &agent_ooo_dir)?;
+    let canaries_passed = canary_report.structural_integrity
+        && canary_report.behavioral_status != canary::CanaryStatus::Fail;
 
-    let cert = report::generate_spa_report(base_dir, triage, detox, reset, canaries_passed, execution_time_ms)?;
+    let cert = report::generate_spa_report(
+        base_dir,
+        triage,
+        detox,
+        reset,
+        canaries_passed,
+        canary_report,
+        execution_time_ms,
+    )?;
 
     Ok(cert)
 }

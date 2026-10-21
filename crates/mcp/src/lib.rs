@@ -1,5 +1,5 @@
 use agent_ooo_core::checkin::{discovery, parser, triage};
-use agent_ooo_core::detox::{pipeline as detox_pipeline, sanitizer};
+use agent_ooo_core::detox::{exporter, pipeline as detox_pipeline, sanitizer};
 use agent_ooo_core::discharge::pipeline as discharge_pipeline;
 use agent_ooo_core::reset::{pipeline as reset_pipeline, serializer};
 use serde_json::{json, Value};
@@ -194,13 +194,44 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "discharge",
-            "description": "Step 4: Verify checkpoint integrity and inspect .agent-ooo/checkpoint.capnp and checkpoint.json, returning session ID, timestamp, git environment registers, and arena counts.",
+            "description": "Step 4: Run the Clinical & Behavioral Canary Suite and inspect .agent-ooo/checkpoint.capnp and checkpoint.json, returning session ID, git environment registers, constraints, CAS recall handles, and canary findings.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "workspace_dir": {
                         "type": "string",
                         "description": "Directory containing .agent-ooo/ (or the .agent-ooo directory itself). Defaults to the current working directory."
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "export",
+            "description": "Stream a secret-scrubbed, ANSI-stripped session transcript in 'jsonl', 'normalized', or 'handoff' format for agent handoffs or external verification tools.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "transcript": {
+                        "type": "string",
+                        "description": "Optional path to a specific transcript file (.jsonl). Auto-discovers the most recent session if omitted."
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["jsonl", "normalized", "handoff"],
+                        "description": "Export format: 'jsonl', 'normalized', or 'handoff' (default: 'handoff')."
+                    },
+                    "max_turns": {
+                        "type": "integer",
+                        "description": "Maximum number of recent transient turns to include alongside pinned system turns (default: 50)."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Optional file path to write the exported transcript to disk instead of returning inline text."
+                    },
+                    "workspace_dir": {
+                        "type": "string",
+                        "description": "Workspace directory containing .agent-ooo/ checkpoints and spillover storage. Defaults to the current working directory."
                     }
                 },
                 "additionalProperties": false
@@ -224,6 +255,7 @@ fn handle_tool_call(id: Value, params: &Value) -> Value {
         "detox" => execute_detox(&args),
         "reset" => execute_reset(&args),
         "discharge" => execute_discharge(&args),
+        "export" => execute_export(&args),
         _ => {
             return jsonrpc_error(id, -32602, &format!("Unknown tool: {name}"));
         }
@@ -387,6 +419,50 @@ fn execute_discharge(args: &Value) -> anyhow::Result<Value> {
     Ok(serde_json::to_value(inspection)?)
 }
 
+fn execute_export(args: &Value) -> anyhow::Result<Value> {
+    let explicit_transcript = args.get("transcript").and_then(|v| v.as_str());
+    let path = discovery::resolve_transcript_non_interactive(explicit_transcript)
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    let format_str = args
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("handoff");
+    let format = exporter::ExportFormat::parse_label(format_str)?;
+
+    let workspace_dir = match args.get("workspace_dir").and_then(|v| v.as_str()) {
+        Some(p) => PathBuf::from(p),
+        None => env::current_dir()?,
+    };
+
+    if let Some(output_path) = args.get("output_path").and_then(|v| v.as_str()) {
+        let max_turns = args
+            .get("max_turns")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let mut out_file = std::fs::File::create(output_path)?;
+        let receipt =
+            exporter::export_transcript(&path, &workspace_dir, format, max_turns, &mut out_file)?;
+        return Ok(json!({
+            "receipt": receipt,
+            "output_path": output_path,
+        }));
+    }
+
+    let max_turns =
+        (args.get("max_turns").and_then(|v| v.as_u64()).unwrap_or(50) as usize).clamp(1, 500);
+
+    let mut buf: Vec<u8> = Vec::new();
+    let receipt =
+        exporter::export_transcript(&path, &workspace_dir, format, Some(max_turns), &mut buf)?;
+    let exported = String::from_utf8_lossy(&buf).to_string();
+
+    Ok(json!({
+        "receipt": receipt,
+        "exported": exported,
+    }))
+}
+
 fn execute_spa(args: &Value) -> anyhow::Result<Value> {
     let start_time = Instant::now();
     let explicit_transcript = args.get("transcript").and_then(|v| v.as_str());
@@ -449,7 +525,10 @@ mod tests {
             handle_jsonrpc_message(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#).unwrap();
         let tools = list_resp["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-        assert_eq!(names, vec!["spa", "checkin", "detox", "reset", "discharge"]);
+        assert_eq!(
+            names,
+            vec!["spa", "checkin", "detox", "reset", "discharge", "export"]
+        );
     }
 
     #[test]
@@ -528,6 +607,37 @@ mod tests {
             .unwrap();
         let discharge_json: Value = serde_json::from_str(discharge_text).unwrap();
         assert_eq!(discharge_json["integrity_passed"], true);
+        assert_eq!(
+            discharge_json["canary_report"]["structural_integrity"],
+            true
+        );
         assert!(discharge_json["checkpoint_capnp_bytes"].as_u64().unwrap() > 0);
+
+        // 4. Call export on transcript.jsonl (resolves sibling transcript_full.jsonl and masks secrets)
+        let export_req = json!({
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "tools/call",
+            "params": {
+                "name": "export",
+                "arguments": {
+                    "transcript": transcript.to_string_lossy(),
+                    "format": "normalized",
+                    "max_turns": 10,
+                    "workspace_dir": dir.path().to_string_lossy()
+                }
+            }
+        });
+        let export_resp = handle_jsonrpc_message(&export_req.to_string()).unwrap();
+        assert_eq!(export_resp["result"]["isError"], false);
+        let export_text = export_resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        let export_json: Value = serde_json::from_str(export_text).unwrap();
+        assert_eq!(export_json["receipt"]["redactions_count"], 1);
+        assert_eq!(export_json["receipt"]["lines_exported"], 1);
+        let exported_payload = export_json["exported"].as_str().unwrap();
+        assert!(exported_payload.contains("[REDACTED_SECRET]"));
+        assert!(!exported_payload.contains("sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx"));
     }
 }

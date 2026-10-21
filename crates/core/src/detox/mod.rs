@@ -1,6 +1,7 @@
 //! Step 2: Detox (Syntactic Cleanse & Bloat Eviction)
 
 pub mod arena;
+pub mod exporter;
 pub mod pipeline;
 pub mod sanitizer;
 pub mod spillover;

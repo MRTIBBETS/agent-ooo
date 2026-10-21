@@ -33,6 +33,7 @@ pub struct CheckpointInspection {
     pub constraints: Vec<String>,
     pub recall_handles: Vec<String>,
     pub severed_loops_count: usize,
+    pub canary_report: crate::discharge::canary::CanaryReport,
 }
 
 pub fn write_checkpoints(
@@ -161,15 +162,18 @@ pub fn write_checkpoints(
 
 /// Reads and verifies `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json` inside `base_dir`.
 pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate::OooError> {
-    let agent_ooo_dir = if base_dir
+    let (workspace_dir, agent_ooo_dir) = if base_dir
         .file_name()
         .and_then(|n| n.to_str())
         .map(|n| n == ".agent-ooo")
         .unwrap_or(false)
     {
-        base_dir.to_path_buf()
+        (
+            base_dir.parent().unwrap_or(base_dir).to_path_buf(),
+            base_dir.to_path_buf(),
+        )
     } else {
-        base_dir.join(".agent-ooo")
+        (base_dir.to_path_buf(), base_dir.join(".agent-ooo"))
     };
 
     let capnp_path = agent_ooo_dir.join("checkpoint.capnp");
@@ -274,10 +278,13 @@ pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
 
-    let canary_ok =
-        crate::discharge::canary::verify_behavioral_canary(&agent_ooo_dir).unwrap_or(false);
-    let integrity_passed =
-        canary_ok && event_hashes_valid && !session_id.is_empty() && session_id == json_session_id;
+    let canary_report =
+        crate::discharge::canary::evaluate_canaries(&workspace_dir, &agent_ooo_dir)?;
+    let integrity_passed = canary_report.structural_integrity
+        && canary_report.behavioral_status != crate::discharge::canary::CanaryStatus::Fail
+        && event_hashes_valid
+        && !session_id.is_empty()
+        && session_id == json_session_id;
 
     Ok(CheckpointInspection {
         integrity_passed,
@@ -293,6 +300,7 @@ pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate
         constraints,
         recall_handles,
         severed_loops_count,
+        canary_report,
     })
 }
 

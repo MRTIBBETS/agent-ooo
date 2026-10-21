@@ -8,8 +8,8 @@ pub mod schema {
 
 pub mod checkin;
 pub mod detox;
-pub mod reset;
 pub mod discharge;
+pub mod reset;
 
 use thiserror::Error;
 

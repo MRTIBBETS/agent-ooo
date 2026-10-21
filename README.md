@@ -46,18 +46,29 @@ agent-ooo spa
 ooo spa ~/.claude/projects/<project>/<session>.jsonl
 ```
 
-You can also book individual treatments (`checkin`, `detox`, `reset`, `discharge`) a la carte.
+You can also book individual treatments (`checkin`, `detox`, `reset`, `discharge`, `export`) a la carte.
 
 ### The 4-step treatment
 
-1. **Checkin (Intake & triage):** Admits the session to the spa, parses the transcript in a constant-memory stream (ignoring sidechain sub-queries), and calculates a context degradation "Rot Index."
+1. **Checkin (Intake, guest vitals & triage):** Admits the session to the spa, parses the transcript in a constant-memory stream (ignoring sidechain sub-queries), extracts guest vitals (agent harness, model ID, tool cadence and error rate, top tools, thinking ratio, and token pace), and assigns a 4-tier wellness condition (`Elite`, `Fit`, `Fair`, `Fatigued`) alongside a multi-factor "Rot Index."
 2. **Detox (Deep-tissue cleanse & credential hygiene):** Strips terminal ANSI escape codes, detects and masks leaked secrets (Anthropic, OpenAI, Google, GitHub, AWS, Bearer tokens, PEM private keys, and JWTs including decoded `role` claims such as `service_role`), and spills payloads over 512 KB into `blake3` content-addressed cold storage while recording CAS recall handles.
 3. **Reset (Structural alignment & loop severing):** Correlates tool calls and outcomes across turns (`EventStream`), severs recursive intent-hash error loops within a 6-event sliding window, extracts durable user directives (`NegativeConstraint`), captures host git registers, and locks session state into a zero-copy Cap'n Proto checkpoint (`LossManifest` included) alongside a portable JSON copy.
-4. **Discharge (Exit exam & clean bill of health):** Verifies structural checkpoint integrity (including 32-byte `blake3` event stream hashes) and issues a signed `.agent-ooo/spa_report.md` and `spa_report.json` summarizing detox results, severed loops, preserved constraints, and an arena compaction preview.
+4. **Discharge (Exit exam & spa report):** Runs the 4-check zero-LLM canary suite (`checkpoint_structural_integrity`, `unresolved_tool_failure`, `unverified_late_edit`, and `stub_or_conflict_injection` via streaming `git diff -U0 HEAD`), evaluates exit wellness (`Elite`, `Fit`, `Fair`, `Fatigued`), and issues `.agent-ooo/spa_report.md` and `spa_report.json`.
+
+### Take-home robes (`ooo export`)
+
+When handing a session off to another agent or piping conversation history into an external reviewer (such as `vet --history-loader`), `ooo export` streams a secret-scrubbed, ANSI-stripped transcript in constant memory:
+
+```bash
+ooo export --format normalized
+ooo export --format handoff --max-turns 50 --output handoff.md
+```
+
+When `--output` is omitted, `ooo export` suppresses the ASCII banner and streams directly to `stdout` so it can be piped safely without leaking `.env` keys or multi-megabyte tool payloads.
 
 ## Self-care via MCP (`agent-ooo-mcp`)
 
-Agents can also check themselves into the spa. `agent-ooo-mcp` exposes the exact same 5 treatments over standard I/O using the Model Context Protocol (JSON-RPC 2.0), so any MCP-capable agent can audit its own transcripts for leaked credentials or inspect checkpoints as a native tool call.
+Agents can also check themselves into the spa. `agent-ooo-mcp` exposes the same 6 commands over standard I/O using the Model Context Protocol (JSON-RPC 2.0), so any MCP-capable agent can audit its own transcripts for leaked credentials, inspect checkpoints, or export sanitized handoffs as a native tool call.
 
 Add `agent-ooo-mcp` to your MCP client configuration (such as Antigravity, Claude Code, or Cursor):
 
@@ -80,7 +91,8 @@ The MCP tool surface mirrors the CLI subcommands 1:1:
 * **`checkin`:** Triages a session transcript (Rot Index, token count, tool call repetitions), or lists discovered sessions across Antigravity, Antigravity IDE, Claude Code, and Cursor when `list_sessions: true` is passed.
 * **`detox`:** Streams a session transcript (or every discovered session on the machine with `all_sessions: true`) in constant memory. Automatically prefers sibling `transcript_full.jsonl` files for Antigravity sessions so truncated tool outputs are still inspected. Hashes raw tokens with `blake3` and returns only masked previews (`first 7...last 4`), line numbers, and occurrence counts so raw credentials are never echoed back into the agent's context window.
 * **`reset`:** Correlates tool events, severs recursive intent-hash loops, extracts user negative constraints and git environment registers, and writes `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`.
-* **`discharge`:** Verifies structural checkpoint integrity and deserializes `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`, returning session metadata, git environment registers, event stream count, preserved negative constraints, CAS recall handles, and arena counts.
+* **`discharge`:** Runs the Clinical & Behavioral Canary Suite and deserializes `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`, returning session metadata, git environment registers, event stream count, preserved negative constraints, CAS recall handles, arena counts, and structured canary findings (`PASS` / `WARN` / `FAIL`).
+* **`export`:** Streams a secret-scrubbed, ANSI-stripped transcript in `"jsonl"`, `"normalized"`, or `"handoff"` format (defaulting to the last 50 transient turns plus pinned system turns in inline MCP mode, or writing to `output_path`).
 
 ## What gets written to `.agent-ooo/`
 
