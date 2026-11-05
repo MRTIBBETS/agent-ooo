@@ -213,8 +213,27 @@ pub fn resolve_transcript_non_interactive(explicit_path: Option<&str>) -> Result
         })
 }
 
-/// Resolves the transcript path, either from explicit user input or via interactive auto-discovery.
-pub fn resolve_transcript_path(explicit_path: Option<&str>) -> Result<PathBuf, String> {
+fn is_interactive_terminal() -> bool {
+    let term_ok = env::var("TERM")
+        .map(|t| !t.is_empty() && !t.eq_ignore_ascii_case("dumb"))
+        .unwrap_or(false);
+    std::io::IsTerminal::is_terminal(&std::io::stdin())
+        && std::io::IsTerminal::is_terminal(&std::io::stdout())
+        && term_ok
+        && env::var_os("CI").is_none()
+        && env::var_os("AGENT_OOO_NON_INTERACTIVE").is_none()
+        && env::var_os("ANTIGRAVITY_AGENT").is_none()
+        && env::var_os("ANTIGRAVITY_CLI_ALIAS").is_none()
+        && env::var_os("CLAUDECODE").is_none()
+}
+
+/// Resolves the transcript path, either from explicit user input or via auto-discovery.
+/// When `latest` is true (or when running in a non-interactive/agent environment), selects
+/// the most recently modified transcript without prompting.
+pub fn resolve_transcript_path_with_mode(
+    explicit_path: Option<&str>,
+    latest: bool,
+) -> Result<PathBuf, String> {
     if let Some(path_str) = explicit_path {
         let path = PathBuf::from(path_str);
         if path.exists() {
@@ -233,14 +252,14 @@ pub fn resolve_transcript_path(explicit_path: Option<&str>) -> Result<PathBuf, S
         );
     }
 
-    if candidates.len() == 1 {
+    if candidates.len() == 1 || latest {
         return Ok(candidates[0].path.clone());
     }
 
     // Non-interactive callers (scripts, CI, other agents) get the most recent session
-    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+    if !is_interactive_terminal() {
         eprintln!(
-            "No terminal detected. Using most recent session: {}",
+            "Non-interactive session detected. Using most recent session: {}",
             candidates[0].path.display()
         );
         return Ok(candidates[0].path.clone());
@@ -265,9 +284,18 @@ pub fn resolve_transcript_path(explicit_path: Option<&str>) -> Result<PathBuf, S
             format!("{} hrs ago", mins / 60)
         };
 
+        let sess_id = session_id_for(&candidate.path);
+        let short_id: String = sess_id.chars().take(12).collect();
+        let kb = candidate.size_bytes / 1024;
+        let size_str = if kb >= 1024 {
+            format!("{:.1} MB", kb as f64 / 1024.0)
+        } else {
+            format!("{} KB", kb.max(1))
+        };
+
         options.push(format!(
-            "{:<15} (last active: {})",
-            candidate.agent_type, time_str
+            "{:<15} [{:<12}] {:>7} (last active: {})",
+            candidate.agent_type, short_id, size_str, time_str
         ));
     }
 
@@ -280,6 +308,11 @@ pub fn resolve_transcript_path(explicit_path: Option<&str>) -> Result<PathBuf, S
         .map_err(|e| e.to_string())?;
 
     Ok(candidates[selection].path.clone())
+}
+
+/// Resolves the transcript path, either from explicit user input or via interactive auto-discovery.
+pub fn resolve_transcript_path(explicit_path: Option<&str>) -> Result<PathBuf, String> {
+    resolve_transcript_path_with_mode(explicit_path, false)
 }
 
 #[cfg(test)]

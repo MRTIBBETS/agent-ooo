@@ -43,8 +43,11 @@ The signature treatment is `spa`. Run it with no arguments to automatically disc
 
 ```bash
 agent-ooo spa
+ooo -y spa
 ooo spa ~/.claude/projects/<project>/<session>.jsonl
 ```
+
+Pass `-y` (or `--latest`) to skip the interactive session picker and automatically select the most recent active session. Non-interactive agent shells (`ANTIGRAVITY_AGENT=1`, `CLAUDECODE=1`, `CI=1`, or `TERM=dumb`) automatically select the latest session without blocking.
 
 You can also book individual treatments (`checkin`, `detox`, `reset`, `discharge`, `export`) a la carte.
 

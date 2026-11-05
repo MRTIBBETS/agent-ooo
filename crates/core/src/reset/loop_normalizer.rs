@@ -40,10 +40,3 @@ pub fn normalize_volatile_data(content: &str) -> String {
         .to_string();
     normalized
 }
-
-/// Generates a blake3 structural intent hash from normalized data
-pub fn compute_structural_hash(normalized_content: &str) -> String {
-    blake3::hash(normalized_content.as_bytes())
-        .to_hex()
-        .to_string()
-}

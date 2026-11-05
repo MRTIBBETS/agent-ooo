@@ -223,13 +223,42 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// Splits a line into sentences on `.`, `!`, `?`, `;` only when the delimiter is
+/// outside inline code backticks and followed by whitespace or end-of-line.
+/// This preserves filenames (`analyzer.rs`, `spa_report.md`) and version numbers (`v0.2`).
+fn split_sentences_preserving_tokens(line: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut in_backticks = false;
+    let bytes = line.as_bytes();
+
+    for (idx, ch) in line.char_indices() {
+        if ch == '`' {
+            in_backticks = !in_backticks;
+            continue;
+        }
+        if !in_backticks && matches!(ch, '.' | '!' | '?' | ';') {
+            let next_idx = idx + ch.len_utf8();
+            let boundary_after = next_idx >= bytes.len() || bytes[next_idx].is_ascii_whitespace();
+            if boundary_after {
+                parts.push(&line[start..idx]);
+                start = next_idx;
+            }
+        }
+    }
+    if start < line.len() {
+        parts.push(&line[start..]);
+    }
+    parts
+}
+
 fn extract_constraints_from_text(
     text: &str,
     seen_hashes: &mut HashSet<blake3::Hash>,
     constraints: &mut Vec<ConstraintRecord>,
 ) {
     for line in text.lines() {
-        for raw_sentence in line.split(['.', '!', '?', ';']) {
+        for raw_sentence in split_sentences_preserving_tokens(line) {
             if constraints.len() >= MAX_CONSTRAINTS {
                 return;
             }
@@ -411,6 +440,8 @@ pub fn analyze_and_sever_arena(arena: &mut MemoryArena) -> ResetAnalysis {
         }
 
         // 2. Antigravity `tool_calls`
+        let step_type = turn.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let status_str = turn.get("status").and_then(|v| v.as_str()).unwrap_or("");
         let has_tool_responses = turn
             .get("tool_responses")
             .and_then(|v| v.as_array())
@@ -419,8 +450,30 @@ pub fn analyze_and_sever_arena(arena: &mut MemoryArena) -> ResetAnalysis {
 
         if let Some(tool_calls) = turn.get("tool_calls").and_then(|v| v.as_array()) {
             flush_inline_pending(&mut pending_calls, &mut tracked_events);
+            for item in pending_calls.drain(..) {
+                tracked_events.push(TrackedEvent {
+                    record: ToolEventRecord {
+                        tool_call_id: item.tool_call_id,
+                        tool_name: item.tool_name,
+                        args_hash: item.args_hash,
+                        exit_code: 0,
+                        stdout_hash: [0u8; 32],
+                        timestamp: item.timestamp,
+                        origin: TrustOrigin::Tool,
+                    },
+                    turn_indices: vec![item.call_turn_idx],
+                });
+            }
+            // Any remaining Antigravity calls without inline results from an earlier
+            // PLANNER_RESPONSE turn were cancelled or backgrounded; clear them so they
+            // cannot shift FIFO matching for the new turn's tool_calls.
+            pending_calls.retain(|p| !p.tool_call_id.starts_with("ag-call-"));
 
+            // Real Antigravity `PLANNER_RESPONSE` turns emit their tool execution output in
+            // subsequent `type: "GENERIC"` turns, not inline on the planner turn.
+            let is_planner_turn = step_type.eq_ignore_ascii_case("PLANNER_RESPONSE");
             let inline_result = if !has_tool_responses
+                && !is_planner_turn
                 && (turn.get("content").is_some() || turn.get("status").is_some())
             {
                 let out_str = turn.get("content").and_then(|v| v.as_str()).unwrap_or("");
@@ -441,6 +494,7 @@ pub fn analyze_and_sever_arena(arena: &mut MemoryArena) -> ResetAnalysis {
 
                 let name = tc
                     .get("name")
+                    .or_else(|| tc.get("ToolName"))
                     .and_then(|v| v.as_str())
                     .or_else(|| {
                         tc.get("function")
@@ -471,7 +525,46 @@ pub fn analyze_and_sever_arena(arena: &mut MemoryArena) -> ResetAnalysis {
             }
         }
 
-        // 3. Antigravity `tool_responses`
+        // 3. Antigravity `type: "GENERIC"` tool output steps and `tool_responses` arrays
+        if step_type.eq_ignore_ascii_case("GENERIC") && !status_str.eq_ignore_ascii_case("RUNNING")
+        {
+            let out_str = turn.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let exit_code = extract_exit_code(turn, out_str);
+            let stdout_hash = hash_normalized(out_str);
+
+            if let Some(matched) = pop_matching_pending(&mut pending_calls, None, None) {
+                let mut indices = vec![matched.call_turn_idx];
+                if matched.call_turn_idx != turn_idx {
+                    indices.push(turn_idx);
+                }
+                tracked_events.push(TrackedEvent {
+                    record: ToolEventRecord {
+                        tool_call_id: matched.tool_call_id,
+                        tool_name: matched.tool_name,
+                        args_hash: matched.args_hash,
+                        exit_code,
+                        stdout_hash,
+                        timestamp: ts,
+                        origin: TrustOrigin::Tool,
+                    },
+                    turn_indices: indices,
+                });
+            } else {
+                tracked_events.push(TrackedEvent {
+                    record: ToolEventRecord {
+                        tool_call_id: format!("ag-generic-{turn_idx}"),
+                        tool_name: "tool_response".to_string(),
+                        args_hash: [0u8; 32],
+                        exit_code,
+                        stdout_hash,
+                        timestamp: ts,
+                        origin: TrustOrigin::Tool,
+                    },
+                    turn_indices: vec![turn_idx],
+                });
+            }
+        }
+
         if let Some(tool_responses) = turn.get("tool_responses").and_then(|v| v.as_array()) {
             for (resp_idx, resp) in tool_responses.iter().enumerate() {
                 let ref_id = resp
@@ -526,6 +619,20 @@ pub fn analyze_and_sever_arena(arena: &mut MemoryArena) -> ResetAnalysis {
     }
 
     flush_inline_pending(&mut pending_calls, &mut tracked_events);
+    for item in pending_calls.drain(..) {
+        tracked_events.push(TrackedEvent {
+            record: ToolEventRecord {
+                tool_call_id: item.tool_call_id,
+                tool_name: item.tool_name,
+                args_hash: item.args_hash,
+                exit_code: 0,
+                stdout_hash: [0u8; 32],
+                timestamp: item.timestamp,
+                origin: TrustOrigin::Tool,
+            },
+            turn_indices: vec![item.call_turn_idx],
+        });
+    }
 
     // Detect recursive loops within a sliding window of `LOOP_WINDOW_EVENTS` (6) events
     let mut visited = vec![false; tracked_events.len()];
@@ -750,7 +857,7 @@ mod tests {
         let mut arena = MemoryArena::new(20);
         arena.push_transient(json!({
             "source": "USER",
-            "content": "Hello there. Never use unwrap() in core. Always use streaming buffers! Do not modify crates/cli."
+            "content": "Hello there. Never use unwrap() in core. Always use streaming buffers! Do not modify `analyzer.rs` or `spa_report.md`."
         }));
         // Duplicate constraint in a later turn should be deduplicated
         arena.push_transient(json!({
@@ -775,12 +882,40 @@ mod tests {
             vec![
                 "Never use unwrap() in core",
                 "Always use streaming buffers",
-                "Do not modify crates/cli"
+                "Do not modify `analyzer.rs` or `spa_report.md`"
             ]
         );
         assert!(analysis
             .constraints
             .iter()
             .all(|c| c.invalidation_rule == "user_override"));
+    }
+
+    #[test]
+    fn correlates_antigravity_planner_response_with_generic_tool_output() {
+        let mut arena = MemoryArena::new(20);
+        arena.push_transient(json!({
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "content": "Running cargo test now.",
+            "tool_calls": [
+                {
+                    "name": "run_command",
+                    "args": {"CommandLine": "cargo test"}
+                }
+            ]
+        }));
+        arena.push_transient(json!({
+            "source": "MODEL",
+            "type": "GENERIC",
+            "status": "DONE",
+            "content": "Created At: 2026-10-21\nCommand exited with code 101."
+        }));
+
+        let analysis = analyze_and_sever_arena(&mut arena);
+        assert_eq!(analysis.events.len(), 1);
+        assert_eq!(analysis.events[0].tool_name, "run_command");
+        assert_eq!(analysis.events[0].exit_code, 101);
     }
 }

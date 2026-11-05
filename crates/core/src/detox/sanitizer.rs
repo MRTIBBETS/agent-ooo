@@ -17,14 +17,14 @@ static ANSI_RE: LazyLock<Regex> = LazyLock::new(|| {
 // mentioning "Bearer tokens" or "sk-" prefixes is not redacted.
 static SECRET_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r"\bsk-ant-[A-Za-z0-9_\-]{20,}",        // Anthropic
-        r"|\bsk-(?:proj-)?[A-Za-z0-9_\-]{20,}", // OpenAI
-        r"|AIza[0-9A-Za-z_\-]{35}",             // Google / GCP API key
+        r"\bsk-ant-[A-Za-z0-9_\-]{20,}",                      // Anthropic
+        r"|\bsk-(?:proj-)?[A-Za-z0-9_\-]{20,}",               // OpenAI
+        r"|AIza[0-9A-Za-z_\-]{35}|\bAQ\.[A-Za-z0-9_\-]{30,}", // Google / GCP / Vertex API key
         r"|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}", // GitHub
-        r"|AKIA[0-9A-Z]{16}",                   // AWS access key ID
+        r"|AKIA[0-9A-Z]{16}",                                 // AWS access key ID
         r"|eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}", // JWT
-        r"|(?i:bearer)\s+[A-Za-z0-9\-._~+/]{20,}=*", // Bearer token
-        r"|-----BEGIN [A-Z ]*PRIVATE KEY-----", // PEM private key header
+        r"|(?i:bearer)\s+[A-Za-z0-9\-._~+/]{20,}=*",          // Bearer token
+        r"|-----BEGIN [A-Z ]*PRIVATE KEY-----",               // PEM private key header
     ))
     .unwrap()
 });
@@ -106,7 +106,7 @@ pub fn classify_secret(matched: &str) -> String {
         "anthropic_api_key".to_string()
     } else if matched.starts_with("sk-") {
         "openai_api_key".to_string()
-    } else if matched.starts_with("AIza") {
+    } else if matched.starts_with("AIza") || matched.starts_with("AQ.") {
         "google_api_key".to_string()
     } else if matched.starts_with("gh") || matched.starts_with("github_pat_") {
         "github_token".to_string()

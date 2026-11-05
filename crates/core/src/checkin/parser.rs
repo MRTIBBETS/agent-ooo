@@ -115,7 +115,8 @@ fn content_text_len(content: &Value) -> usize {
 /// Supports the Antigravity flat schema (`source`, `content`, `tool_calls`) and the
 /// Claude Code nested schema (`type`, `message.role`, `message.content[]`).
 pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics> {
-    let file = File::open(path)?;
+    let target_path = crate::checkin::discovery::resolve_scan_target(path.as_ref());
+    let file = File::open(target_path)?;
     let reader = BufReader::new(file);
 
     let mut metrics = TranscriptMetrics::default();
@@ -130,6 +131,18 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
             if value.get("isSidechain").and_then(|v| v.as_bool()) == Some(true) {
                 continue;
             }
+
+            let step_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let status_str = value.get("status").and_then(|v| v.as_str()).unwrap_or("");
+
+            // Skip intermediate Antigravity async tool-launch notifications ("RUNNING");
+            // the completed "DONE" or "ERROR" step is recorded when the tool finishes.
+            if step_type.eq_ignore_ascii_case("GENERIC")
+                && status_str.eq_ignore_ascii_case("RUNNING")
+            {
+                continue;
+            }
+
             metrics.total_turns += 1;
             let message = value.get("message").filter(|m| m.is_object());
 
@@ -144,15 +157,21 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
                 }
             }
 
+            let is_antigravity_tool_result = step_type.eq_ignore_ascii_case("GENERIC");
+
             // Count roles (e.g., source: "USER", "MODEL", "SYSTEM" or role: "user", "assistant")
-            let role = value
-                .get("source")
-                .or_else(|| value.get("role"))
-                .or_else(|| message.and_then(|m| m.get("role")))
-                .or_else(|| value.get("type"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("UNKNOWN")
-                .to_uppercase();
+            let role = if is_antigravity_tool_result {
+                "TOOL".to_string()
+            } else {
+                value
+                    .get("source")
+                    .or_else(|| value.get("role"))
+                    .or_else(|| message.and_then(|m| m.get("role")))
+                    .or_else(|| value.get("type"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("UNKNOWN")
+                    .to_uppercase()
+            };
 
             let is_user_role = matches!(role.as_str(), "USER" | "USER_EXPLICIT" | "USER_INPUT");
             let is_assistant_role =
@@ -180,6 +199,8 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
                 }
             }
 
+            let mut tool_args_bytes = 0usize;
+
             // Extract tool call signatures
             // Check Antigravity format `tool_calls`
             if let Some(tool_calls) = value.get("tool_calls").and_then(|v| v.as_array()) {
@@ -199,16 +220,18 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
                     }
                     if let Some(args) = tool_call.get("arguments").or_else(|| tool_call.get("args"))
                     {
-                        metrics.output_bytes += args.to_string().len();
+                        let arg_len = args.to_string().len();
+                        tool_args_bytes += arg_len;
+                        metrics.output_bytes += arg_len;
                     }
                 }
             }
 
-            let top_status_error = value
-                .get("status")
-                .and_then(|v| v.as_str())
-                .map(|s| s.eq_ignore_ascii_case("error"))
-                .unwrap_or(false);
+            let top_status_error = status_str.eq_ignore_ascii_case("error");
+
+            if is_antigravity_tool_result && is_failed_tool_block(&value, top_status_error) {
+                metrics.failed_tool_calls += 1;
+            }
 
             if let Some(tool_responses) = value.get("tool_responses").and_then(|v| v.as_array()) {
                 for resp in tool_responses {
@@ -259,13 +282,14 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
 
             // Naive token estimation: characters / 4
             let content_len = match value.get("content").and_then(|v| v.as_str()) {
-                Some(content) => content.len() + top_thinking_len,
+                Some(content) => content.len() + top_thinking_len + tool_args_bytes,
                 None => {
                     message
                         .and_then(|m| m.get("content"))
                         .map(content_text_len)
                         .unwrap_or(0)
                         + top_thinking_len
+                        + tool_args_bytes
                 }
             };
             metrics.total_input_tokens += content_len / 4;
@@ -321,5 +345,40 @@ mod tests {
         assert_eq!(metrics.role_distribution.get("USER"), Some(&2));
         assert_eq!(metrics.role_distribution.get("ASSISTANT"), Some(&1));
         assert!(metrics.total_input_tokens > 0);
+    }
+
+    #[test]
+    fn test_parse_antigravity_generic_tool_results_and_failures() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"Run tests"}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","thinking":"Let us run cargo test","tool_calls":[{{"name":"run_command","args":{{"CommandLine":"cargo test"}}}}]}}"#
+        )
+        .unwrap();
+        // Intermediate RUNNING notification should be skipped
+        writeln!(
+            file,
+            r#"{{"source":"MODEL","type":"GENERIC","status":"RUNNING","content":"Tool is running"}}"#
+        )
+        .unwrap();
+        // Completed GENERIC tool output with non-zero exit code
+        writeln!(
+            file,
+            r#"{{"source":"MODEL","type":"GENERIC","status":"DONE","content":"Command exited with code 101.\n\nerror: test failed"}}"#
+        )
+        .unwrap();
+
+        let metrics = parse_transcript(file.path()).unwrap();
+        assert_eq!(metrics.total_turns, 3);
+        assert_eq!(metrics.user_turns, 1);
+        assert_eq!(metrics.assistant_turns, 1);
+        assert_eq!(metrics.role_distribution.get("TOOL"), Some(&1));
+        assert_eq!(metrics.total_tool_calls_count, 1);
+        assert_eq!(metrics.failed_tool_calls, 1);
     }
 }

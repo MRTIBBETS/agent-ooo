@@ -15,6 +15,10 @@ use std::time::Instant;
 #[command(version)]
 #[command(about = "Spa retreats for your AI. Reset, refresh, relax.", long_about = None)]
 pub struct Cli {
+    /// Automatically select the most recent session without interactive prompting
+    #[arg(short = 'y', long = "latest", global = true)]
+    pub latest: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -66,15 +70,8 @@ pub enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
-    /// Background watchdog monitoring active sessions.
-    #[command(display_order = 7)]
-    Watch {
-        /// Polling interval in seconds
-        #[arg(short, long, default_value_t = 10)]
-        interval: u64,
-    },
     /// Update agent-ooo to the latest version.
-    #[command(display_order = 8)]
+    #[command(display_order = 7)]
     Update,
 }
 
@@ -92,8 +89,9 @@ pub fn run() -> anyhow::Result<()> {
                 "{} Admitting session for checkin triage...",
                 "[CHECKIN]".bold().green()
             );
-            let path = discovery::resolve_transcript_path(transcript.as_deref())
-                .map_err(|e| anyhow::anyhow!(e))?;
+            let path =
+                discovery::resolve_transcript_path_with_mode(transcript.as_deref(), cli.latest)
+                    .map_err(|e| anyhow::anyhow!(e))?;
             let metrics = parser::parse_transcript(&path)?;
             let receipt = triage::calculate_triage(&path, metrics);
             println!("Session ID: {}", receipt.session_id);
@@ -116,20 +114,40 @@ pub fn run() -> anyhow::Result<()> {
                 "{} Syntactic cleanse initiated...",
                 "[DETOX]".bold().yellow()
             );
-            let path = discovery::resolve_transcript_path(transcript.as_deref())
-                .map_err(|e| anyhow::anyhow!(e))?;
+            let path =
+                discovery::resolve_transcript_path_with_mode(transcript.as_deref(), cli.latest)
+                    .map_err(|e| anyhow::anyhow!(e))?;
             let current_dir = env::current_dir()?;
             let (_, receipt) = detox_pipeline::execute_detox(&path, &current_dir)
                 .map_err(|e| anyhow::anyhow!(e))?;
-            println!("Sanitized Bytes: {}", receipt.sanitized_bytes);
+            let scan = agent_ooo_core::detox::sanitizer::scan_transcript_secrets(&path)?;
+            println!(
+                "Raw Bytes: {} | Sanitized Bytes: {} | Spilled Payloads: {}",
+                receipt.raw_bytes, receipt.sanitized_bytes, receipt.spilled_payloads_count
+            );
+            println!(
+                "Secrets Masked: {} total across {} distinct credential(s)",
+                scan.total_occurrences, scan.distinct_secrets
+            );
+            for finding in &scan.findings {
+                println!(
+                    "  * {} [{}]: {} occurrence(s) (lines {}..{})",
+                    finding.secret_type.bold(),
+                    finding.masked_preview,
+                    finding.occurrences,
+                    finding.first_line,
+                    finding.last_line
+                );
+            }
         }
         Some(Commands::Reset { transcript }) => {
             println!(
                 "{} Structural state alignment initiated...",
                 "[RESET]".bold().blue()
             );
-            let path = discovery::resolve_transcript_path(transcript.as_deref())
-                .map_err(|e| anyhow::anyhow!(e))?;
+            let path =
+                discovery::resolve_transcript_path_with_mode(transcript.as_deref(), cli.latest)
+                    .map_err(|e| anyhow::anyhow!(e))?;
             let current_dir = env::current_dir()?;
             let (mut arena, detox_receipt) = detox_pipeline::execute_detox(&path, &current_dir)
                 .map_err(|e| anyhow::anyhow!(e))?;
@@ -197,8 +215,9 @@ pub fn run() -> anyhow::Result<()> {
                     "{} Streaming sanitized transcript export...",
                     "[EXPORT]".bold().cyan()
                 );
-                let path = discovery::resolve_transcript_path(transcript.as_deref())
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                let path =
+                    discovery::resolve_transcript_path_with_mode(transcript.as_deref(), cli.latest)
+                        .map_err(|e| anyhow::anyhow!(e))?;
                 let mut out_file = std::fs::File::create(out_path)?;
                 let receipt = agent_ooo_core::detox::exporter::export_transcript(
                     &path,
@@ -243,8 +262,9 @@ pub fn run() -> anyhow::Result<()> {
             );
 
             let start_time = Instant::now();
-            let path = discovery::resolve_transcript_path(transcript.as_deref())
-                .map_err(|e| anyhow::anyhow!(e))?;
+            let path =
+                discovery::resolve_transcript_path_with_mode(transcript.as_deref(), cli.latest)
+                    .map_err(|e| anyhow::anyhow!(e))?;
             println!("{} Discovered transcript: {}", "->".cyan(), path.display());
 
             let current_dir = env::current_dir()?;
@@ -333,13 +353,6 @@ pub fn run() -> anyhow::Result<()> {
                 "============================================="
                     .bold()
                     .cyan()
-            );
-        }
-        Some(Commands::Watch { interval }) => {
-            println!(
-                "{} Background watchdog daemon active (interval: {}s)",
-                "[WATCH]".bold().green(),
-                interval
             );
         }
         Some(Commands::Update) => {

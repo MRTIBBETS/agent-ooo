@@ -51,12 +51,25 @@ fn sanitize_nested(
         }),
         Value::Object(map) => {
             let mut totals = (0, 0);
-            for key in ["text", "thinking", "content"] {
-                if let Some(field) = map.get_mut(key) {
-                    let (r, d) = sanitize_nested(field, workspace_dir, receipt);
-                    totals.0 += r;
-                    totals.1 += d;
+            for (key, field) in map.iter_mut() {
+                if matches!(
+                    key.as_str(),
+                    "id" | "tool_use_id"
+                        | "uuid"
+                        | "parentUuid"
+                        | "sessionId"
+                        | "type"
+                        | "role"
+                        | "source"
+                        | "status"
+                        | "name"
+                        | "ToolName"
+                ) {
+                    continue;
                 }
+                let (r, d) = sanitize_nested(field, workspace_dir, receipt);
+                totals.0 += r;
+                totals.1 += d;
             }
             totals
         }
@@ -69,7 +82,8 @@ pub fn execute_detox(
     transcript_path: &Path,
     workspace_dir: &Path,
 ) -> Result<(MemoryArena, DetoxReceipt), String> {
-    let file = File::open(transcript_path).map_err(|e| e.to_string())?;
+    let target_path = crate::checkin::discovery::resolve_scan_target(transcript_path);
+    let file = File::open(target_path).map_err(|e| e.to_string())?;
     let reader = BufReader::new(file);
 
     // Initialize the generational arena (let's say we hold up to 100 turns in transient before evicting)
@@ -98,7 +112,7 @@ pub fn execute_detox(
 
             // Count raw bytes only for parsed lines so raw and sanitized totals are comparable
             receipt.raw_bytes += line.len();
-            // Check if it's a system prompt to pin it
+            // Check if it's a root system prompt to pin it (excluding transient runtime notifications)
             let source = value
                 .get("source")
                 .or_else(|| value.get("role"))
@@ -106,35 +120,44 @@ pub fn execute_detox(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_uppercase();
+            let step_type = value
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_uppercase();
 
-            let is_system = source == "SYSTEM" || source == "SYSTEM_PROMPT";
+            let is_system = (source == "SYSTEM" || source == "SYSTEM_PROMPT")
+                && step_type != "SYSTEM_MESSAGE"
+                && step_type != "CHECKPOINT";
 
             // Net change in decoded string length for this line (negative = bytes removed)
             let mut delta: i64 = 0;
 
-            // Sanitize content
-            if let Some(content_val) = value.get_mut("content") {
-                if let Some(content_str) = content_val.as_str() {
-                    let original_len = content_str.len() as i64;
-                    let (sanitized_str, red_count) = sanitize_content(content_str);
-                    receipt.redactions_count += red_count;
+            // Sanitize content and top-level thinking
+            for top_key in ["content", "thinking"] {
+                if let Some(content_val) = value.get_mut(top_key) {
+                    if let Some(content_str) = content_val.as_str() {
+                        let original_len = content_str.len() as i64;
+                        let (sanitized_str, red_count) = sanitize_content(content_str);
+                        receipt.redactions_count += red_count;
 
-                    // Check for spillover (large tool outputs)
-                    let final_str =
-                        match manage_spillover_with_handle(&sanitized_str, workspace_dir) {
-                            Ok((final_str, Some(handle))) => {
-                                receipt.spilled_payloads_count += 1;
-                                push_recall_handle(&mut receipt.recall_handles, handle);
-                                final_str
-                            }
-                            Ok((final_str, None)) => final_str,
-                            Err(e) => {
-                                eprintln!("Warning: Spillover failed - {}", e);
-                                sanitized_str
-                            }
-                        };
-                    delta += final_str.len() as i64 - original_len;
-                    *content_val = Value::String(final_str);
+                        // Check for spillover (large tool outputs)
+                        let final_str =
+                            match manage_spillover_with_handle(&sanitized_str, workspace_dir) {
+                                Ok((final_str, Some(handle))) => {
+                                    receipt.spilled_payloads_count += 1;
+                                    push_recall_handle(&mut receipt.recall_handles, handle);
+                                    final_str
+                                }
+                                Ok((final_str, None)) => final_str,
+                                Err(e) => {
+                                    eprintln!("Warning: Spillover failed - {}", e);
+                                    sanitized_str
+                                }
+                            };
+                        delta += final_str.len() as i64 - original_len;
+                        *content_val = Value::String(final_str);
+                    }
                 }
             }
 
@@ -163,6 +186,13 @@ pub fn execute_detox(
                         }
                     }
                 }
+            }
+
+            // Also sanitize tool_calls arguments (Antigravity / OpenAI function call schema)
+            if let Some(tool_calls) = value.get_mut("tool_calls") {
+                let (red_count, d) = sanitize_nested(tool_calls, workspace_dir, &mut receipt);
+                receipt.redactions_count += red_count;
+                delta += d;
             }
 
             // Claude Code nests text under message.content (string or array of blocks)

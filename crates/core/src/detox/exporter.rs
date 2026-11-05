@@ -115,6 +115,14 @@ fn sanitize_value_in_place(
 }
 
 fn is_system_turn(value: &Value) -> bool {
+    let step_type = value
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    if step_type == "SYSTEM_MESSAGE" || step_type == "CHECKPOINT" {
+        return false;
+    }
     let raw_role = value
         .get("source")
         .or_else(|| value.get("role"))
@@ -224,6 +232,12 @@ fn extract_normalized_turns(value: &Value) -> Vec<NormalizedTurn> {
     }
 
     // 2. Antigravity / generic JSONL schema
+    let step_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let status_str = value.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    if step_type.eq_ignore_ascii_case("GENERIC") && status_str.eq_ignore_ascii_case("RUNNING") {
+        return out;
+    }
+
     let raw_source = value
         .get("source")
         .or_else(|| value.get("role"))
@@ -231,12 +245,16 @@ fn extract_normalized_turns(value: &Value) -> Vec<NormalizedTurn> {
         .and_then(|v| v.as_str())
         .unwrap_or("user");
 
-    let role = match raw_source.to_ascii_uppercase().as_str() {
-        "SYSTEM" | "SYSTEM_PROMPT" => "system",
-        "USER" | "USER_EXPLICIT" | "USER_INPUT" => "user",
-        "MODEL" | "ASSISTANT" | "PLANNER_RESPONSE" => "assistant",
-        "TOOL" | "TOOL_RESPONSE" => "tool",
-        _ => "user",
+    let role = if step_type.eq_ignore_ascii_case("GENERIC") {
+        "tool"
+    } else {
+        match raw_source.to_ascii_uppercase().as_str() {
+            "SYSTEM" | "SYSTEM_PROMPT" => "system",
+            "USER" | "USER_EXPLICIT" | "USER_INPUT" => "user",
+            "MODEL" | "ASSISTANT" | "PLANNER_RESPONSE" => "assistant",
+            "TOOL" | "TOOL_RESPONSE" => "tool",
+            _ => "user",
+        }
     }
     .to_string();
 
