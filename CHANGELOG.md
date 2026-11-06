@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-06
+
 ### Added
 - **Empirical Code & Product Audit Polish (Antigravity `GENERIC` Tool Correlation, Non-Interactive PTY Guard, & Full-Transcript Resolution):**
   - Updated `checkin::parser::parse_transcript`, `reset::analyzer::analyze_and_sever_arena`, and `detox::exporter::export_transcript` to correlate Antigravity `type: "PLANNER_RESPONSE"` `tool_calls` with subsequent `type: "GENERIC"` tool output steps (`status: "DONE" | "ERROR" | "RUNNING"`), accurately detecting tool failures (`status == "ERROR"` or `"Command exited with code N"`) and mapping `GENERIC` outputs to `"tool"` turns rather than assistant turns.
