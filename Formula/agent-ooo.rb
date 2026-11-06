@@ -1,20 +1,20 @@
 class AgentOoo < Formula
   desc "Spa retreats for your AI. Reset, refresh, relax."
   homepage "https://github.com/mrtibbets/agent-ooo"
-  version "0.1.7"
+  version "0.2.0"
   license "Apache-2.0"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/mrtibbets/agent-ooo/releases/download/v0.1.7/agent-ooo-aarch64-apple-darwin.tar.gz"
-      sha256 "70c18dc7051872fdb55d7c0add9d2f1d21ac8128e7390c1c936612ce036e58ce"
+      url "https://github.com/mrtibbets/agent-ooo/releases/download/v0.2.0/agent-ooo-aarch64-apple-darwin.tar.gz"
+      sha256 "ea89f7f6eb0cce37210bda6cb991d65ca1eb0b5bab67e6879dee3d169c288fe2"
     end
   end
 
   on_linux do
     if Hardware::CPU.intel?
-      url "https://github.com/mrtibbets/agent-ooo/releases/download/v0.1.7/agent-ooo-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "425525035acbbd1517d263b1273d09db2d27d2d42727f7e592f7adfa0d97aad1"
+      url "https://github.com/mrtibbets/agent-ooo/releases/download/v0.2.0/agent-ooo-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "7cdfda3608398ff3d177133bb7f68d2c7252979f3a68575c5dc92537ff998d96"
     end
   end
 
