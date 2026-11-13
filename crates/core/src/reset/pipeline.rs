@@ -13,6 +13,7 @@ pub fn execute_reset(
     // 1. Analyze arena turns, extract tool events and negative constraints, and sever recursive loops
     let analysis = analyzer::analyze_and_sever_arena(arena);
     let severed_loops_count = analysis.severed_loops_count;
+    let pruned_turns_count = analysis.pruned_turns_count;
     let event_stream_count = analysis.events.len();
     let constraints_count = analysis.constraints.len();
 
@@ -29,7 +30,7 @@ pub fn execute_reset(
     .count();
 
     // 3. Serialize
-    let (capnp_bytes, json_bytes) = serializer::write_checkpoints(
+    let (capnp_bytes, json_bytes, retained_bytes) = serializer::write_checkpoints(
         workspace_dir,
         session_id,
         &env_registers,
@@ -40,6 +41,8 @@ pub fn execute_reset(
 
     Ok(ResetReceipt {
         severed_loops_count,
+        pruned_turns_count,
+        retained_bytes,
         environment_registers_count,
         event_stream_count,
         constraints_count,

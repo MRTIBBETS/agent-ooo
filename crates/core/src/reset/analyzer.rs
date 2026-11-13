@@ -252,12 +252,27 @@ fn split_sentences_preserving_tokens(line: &str) -> Vec<&str> {
     parts
 }
 
+fn extract_user_prompt_slice(text: &str) -> &str {
+    if let Some(start_idx) = text.find("<USER_REQUEST>") {
+        let after = &text[start_idx + "<USER_REQUEST>".len()..];
+        if let Some(end_idx) = after.find("</USER_REQUEST>") {
+            return &after[..end_idx];
+        }
+        return after;
+    }
+    if let Some(meta_idx) = text.find("<ADDITIONAL_METADATA>") {
+        return &text[..meta_idx];
+    }
+    text
+}
+
 fn extract_constraints_from_text(
     text: &str,
     seen_hashes: &mut HashSet<blake3::Hash>,
     constraints: &mut Vec<ConstraintRecord>,
 ) {
-    for line in text.lines() {
+    let scoped = extract_user_prompt_slice(text);
+    for line in scoped.lines() {
         for raw_sentence in split_sentences_preserving_tokens(line) {
             if constraints.len() >= MAX_CONSTRAINTS {
                 return;
@@ -345,6 +360,9 @@ pub fn analyze_and_sever_arena(arena: &mut MemoryArena) -> ResetAnalysis {
     let mut constraints: Vec<ConstraintRecord> = Vec::new();
 
     for item in arena.gen0() {
+        extract_user_constraints(item, &mut seen_constraint_hashes, &mut constraints);
+    }
+    for item in arena.user_anchors() {
         extract_user_constraints(item, &mut seen_constraint_hashes, &mut constraints);
     }
 

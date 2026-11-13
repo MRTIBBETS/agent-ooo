@@ -194,13 +194,25 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "discharge",
-            "description": "Step 4: Run the Clinical & Behavioral Canary Suite and inspect .agent-ooo/checkpoint.capnp and checkpoint.json, returning session ID, git environment registers, constraints, CAS recall handles, and canary findings.",
+            "description": "Step 4: Run the Clinical & Behavioral Canary Suite and inspect .agent-ooo/checkpoint.capnp and checkpoint.json, or retrieve a bounded slice of a spilled CAS payload via recall_handle.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "workspace_dir": {
                         "type": "string",
                         "description": "Directory containing .agent-ooo/ (or the .agent-ooo directory itself). Defaults to the current working directory."
+                    },
+                    "recall_handle": {
+                        "type": "string",
+                        "description": "Optional <blake3>.bin CAS handle from LossManifest to read from .agent-ooo/spillover/ in bounded slices."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Optional byte offset into the spilled payload when recall_handle is set (default: 0)."
+                    },
+                    "max_bytes": {
+                        "type": "integer",
+                        "description": "Maximum bytes to return when recall_handle is set (clamped to 1..=32768, default: 8192)."
                     }
                 },
                 "additionalProperties": false
@@ -415,6 +427,17 @@ fn execute_discharge(args: &Value) -> anyhow::Result<Value> {
         Some(p) => PathBuf::from(p),
         None => env::current_dir()?,
     };
+    if let Some(handle) = args.get("recall_handle").and_then(|v| v.as_str()) {
+        let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+        let max_bytes = args
+            .get("max_bytes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(8192) as usize;
+        let recalled = agent_ooo_core::detox::spillover::recall_spilled_payload(
+            &dir, handle, offset, max_bytes,
+        )?;
+        return Ok(serde_json::to_value(recalled)?);
+    }
     let inspection = serializer::inspect_checkpoint(&dir)?;
     Ok(serde_json::to_value(inspection)?)
 }

@@ -7,6 +7,7 @@ pub struct EnvironmentRegisters {
     pub git_commit: String,
     pub working_directory: String,
     pub modified_files: Vec<String>,
+    pub head_timestamp: u64,
 }
 
 pub fn extract_registers(workspace_dir: &Path) -> EnvironmentRegisters {
@@ -39,6 +40,19 @@ pub fn extract_registers(workspace_dir: &Path) -> EnvironmentRegisters {
     }
 
     if let Ok(output) = Command::new("git")
+        .args(["log", "-1", "--format=%ct", "HEAD"])
+        .current_dir(workspace_dir)
+        .output()
+    {
+        if output.status.success() {
+            registers.head_timestamp = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<u64>()
+                .unwrap_or(0);
+        }
+    }
+
+    if let Ok(output) = Command::new("git")
         .arg("diff")
         .arg("--name-only")
         .current_dir(workspace_dir)
@@ -49,6 +63,7 @@ pub fn extract_registers(workspace_dir: &Path) -> EnvironmentRegisters {
             registers.modified_files = files_str
                 .lines()
                 .filter(|s| !s.is_empty())
+                .take(256)
                 .map(|s| s.to_string())
                 .collect();
         }

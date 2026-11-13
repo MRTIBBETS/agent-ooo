@@ -49,11 +49,20 @@ pub enum Commands {
         /// Optional path to a specific transcript file (.jsonl)
         transcript: Option<String>,
     },
-    /// Step 4: Verify health and generate the Spa Report.
+    /// Step 4: Verify health, inspect checkpoints, or recall a cold-storage CAS payload.
     #[command(display_order = 5)]
     Discharge {
-        /// Optional path to a specific transcript file (.jsonl)
+        /// Optional path to a workspace directory containing .agent-ooo/
         transcript: Option<String>,
+        /// Optional CAS spillover handle (<blake3> or <blake3>.bin) to recall from .agent-ooo/spillover/
+        #[arg(long)]
+        recall: Option<String>,
+        /// Byte offset when recalling a spilled payload
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        /// Maximum bytes to read when recalling a spilled payload (clamped to 32 KB)
+        #[arg(long, default_value_t = 8192)]
+        max_bytes: usize,
     },
     /// Stream a secret-scrubbed session transcript to stdout or a file.
     #[command(display_order = 6)]
@@ -164,15 +173,43 @@ pub fn run() -> anyhow::Result<()> {
             );
             println!("Checkpoint size: {} bytes", receipt.checkpoint_capnp_bytes);
         }
-        Some(Commands::Discharge { transcript }) => {
-            println!(
-                "{} Clinical verification initiated...",
-                "[DISCHARGE]".bold().magenta()
-            );
+        Some(Commands::Discharge {
+            transcript,
+            recall,
+            offset,
+            max_bytes,
+        }) => {
             let target_dir = match transcript.as_deref() {
                 Some(p) => std::path::PathBuf::from(p),
                 None => env::current_dir()?,
             };
+            if let Some(handle) = recall {
+                println!(
+                    "{} Recalling cold-storage CAS payload: {}",
+                    "[DISCHARGE]".bold().magenta(),
+                    handle
+                );
+                let rec = agent_ooo_core::detox::spillover::recall_spilled_payload(
+                    &target_dir,
+                    handle,
+                    *offset,
+                    *max_bytes,
+                )?;
+                println!(
+                    "Handle: {} | Offset: {}..{} of {} bytes (has_more: {})\n",
+                    rec.handle,
+                    rec.offset,
+                    rec.offset + rec.bytes_read as u64,
+                    rec.total_bytes,
+                    rec.has_more
+                );
+                println!("{}", rec.content);
+                return Ok(());
+            }
+            println!(
+                "{} Clinical verification initiated...",
+                "[DISCHARGE]".bold().magenta()
+            );
             let inspection = agent_ooo_core::reset::serializer::inspect_checkpoint(&target_dir)
                 .map_err(|e| anyhow::anyhow!(e))?;
             println!("Session ID: {}", inspection.session_id);
@@ -342,7 +379,7 @@ pub fn run() -> anyhow::Result<()> {
             };
             println!("* Behavioral Canaries: {}", behavioral_label);
             println!(
-                "* Token Reduction (Detox): {:.2}%",
+                "* State Footprint Reduction: {:.2}%",
                 cert.token_reduction_percentage
             );
             println!("* Estimated Savings: ${:.4}", cert.net_savings_usd);

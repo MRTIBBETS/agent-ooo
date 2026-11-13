@@ -129,6 +129,18 @@ pub fn execute_detox(
             let is_system = (source == "SYSTEM" || source == "SYSTEM_PROMPT")
                 && step_type != "SYSTEM_MESSAGE"
                 && step_type != "CHECKPOINT";
+            let is_explicit_user =
+                matches!(source.as_str(), "USER" | "USER_EXPLICIT" | "USER_INPUT")
+                    && value
+                        .get("message")
+                        .and_then(|m| m.get("content"))
+                        .and_then(|c| c.as_array())
+                        .map(|blocks| {
+                            blocks.iter().any(|b| {
+                                b.get("type").and_then(|t| t.as_str()) != Some("tool_result")
+                            })
+                        })
+                        .unwrap_or(true);
 
             // Net change in decoded string length for this line (negative = bytes removed)
             let mut delta: i64 = 0;
@@ -213,6 +225,9 @@ pub fn execute_detox(
             if is_system {
                 arena.pin_gen0(value);
             } else {
+                if is_explicit_user {
+                    arena.pin_user_anchor(value.clone());
+                }
                 transient_sizes.push_back(line_sanitized);
                 if arena.push_transient(value).is_some() {
                     let evicted_size = transient_sizes.pop_front().unwrap_or(0);

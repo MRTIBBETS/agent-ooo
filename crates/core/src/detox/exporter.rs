@@ -136,14 +136,14 @@ fn is_system_turn(value: &Value) -> bool {
     )
 }
 
-#[derive(Debug, Clone)]
-struct NormalizedTurn {
-    role: String,
-    content: String,
-    tool_name: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NormalizedTurn {
+    pub role: String,
+    pub content: String,
+    pub tool_name: Option<String>,
 }
 
-fn extract_normalized_turns(value: &Value) -> Vec<NormalizedTurn> {
+pub fn extract_normalized_turns(value: &Value) -> Vec<NormalizedTurn> {
     let mut out = Vec::new();
 
     // 1. Claude Code schema: `message.content` array or string
@@ -234,7 +234,10 @@ fn extract_normalized_turns(value: &Value) -> Vec<NormalizedTurn> {
     // 2. Antigravity / generic JSONL schema
     let step_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let status_str = value.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    if step_type.eq_ignore_ascii_case("GENERIC") && status_str.eq_ignore_ascii_case("RUNNING") {
+    if (step_type.eq_ignore_ascii_case("GENERIC") && status_str.eq_ignore_ascii_case("RUNNING"))
+        || step_type.eq_ignore_ascii_case("SYSTEM_MESSAGE")
+        || step_type.eq_ignore_ascii_case("CHECKPOINT")
+    {
         return out;
     }
 
@@ -461,6 +464,85 @@ fn write_turn_by_format<W: Write>(
     }
 }
 
+fn read_checkpoint_arena_turns(
+    workspace_dir: &Path,
+    expected_session_id: &str,
+    max_turns: Option<usize>,
+) -> Option<Vec<NormalizedTurn>> {
+    let capnp_path = workspace_dir.join(".agent-ooo").join("checkpoint.capnp");
+    let file = File::open(capnp_path).ok()?;
+    let mut reader = BufReader::new(file);
+    let msg =
+        capnp::serialize_packed::read_message(&mut reader, capnp::message::ReaderOptions::new())
+            .ok()?;
+    let root = msg
+        .get_root::<crate::schema::session_checkpoint::Reader>()
+        .ok()?;
+
+    let cp_session_id = root.get_session_id().ok()?.to_str().ok()?;
+    if cp_session_id != expected_session_id {
+        return None;
+    }
+
+    let gen0_reader = root.get_gen0_arena().ok()?;
+    let transient_reader = root.get_transient_arena().ok()?;
+    if gen0_reader.is_empty() && transient_reader.is_empty() {
+        return None;
+    }
+
+    let mut gen0_turns = Vec::with_capacity(gen0_reader.len() as usize);
+    for slot in gen0_reader.iter() {
+        let role = slot.get_role().ok()?.to_str().ok()?.to_string();
+        let content = slot.get_content().ok()?.to_str().ok()?.to_string();
+        let tool = slot.get_tool_name().ok()?.to_str().ok()?;
+        let tool_name = (!tool.is_empty()).then(|| tool.to_string());
+        gen0_turns.push(NormalizedTurn {
+            role,
+            content,
+            tool_name,
+        });
+    }
+
+    let mut transient_turns = Vec::with_capacity(transient_reader.len() as usize);
+    for slot in transient_reader.iter() {
+        let role = slot.get_role().ok()?.to_str().ok()?.to_string();
+        let content = slot.get_content().ok()?.to_str().ok()?.to_string();
+        let tool = slot.get_tool_name().ok()?.to_str().ok()?;
+        let tool_name = (!tool.is_empty()).then(|| tool.to_string());
+        transient_turns.push(NormalizedTurn {
+            role,
+            content,
+            tool_name,
+        });
+    }
+
+    if let Some(cap) = max_turns {
+        if transient_turns.len() > cap {
+            let drop_count = transient_turns.len() - cap;
+            transient_turns.drain(0..drop_count);
+        }
+    }
+
+    gen0_turns.extend(transient_turns);
+    Some(gen0_turns)
+}
+
+fn write_normalized_turn_handoff<W: Write>(
+    turn: &NormalizedTurn,
+    writer: &mut W,
+) -> Result<usize, crate::OooError> {
+    let heading = match turn.tool_name.as_deref() {
+        Some(tool) if !tool.is_empty() => {
+            format!("### {} via `{}`\n\n", turn.role.to_ascii_uppercase(), tool)
+        }
+        _ => format!("### {}\n\n", turn.role.to_ascii_uppercase()),
+    };
+    let mut bytes = write_bytes_counted(writer, heading.as_bytes())?;
+    bytes += write_bytes_counted(writer, turn.content.as_bytes())?;
+    bytes += write_bytes_counted(writer, b"\n\n")?;
+    Ok(bytes)
+}
+
 /// Streams and sanitizes `transcript_path` in constant memory (or a bounded ring buffer
 /// when `max_turns` is `Some(n)`) and writes the scrubbed output to `writer`.
 pub fn export_transcript<W: Write>(
@@ -471,6 +553,32 @@ pub fn export_transcript<W: Write>(
     writer: &mut W,
 ) -> Result<ExportReceipt, crate::OooError> {
     let session_id = discovery::session_id_for(transcript_path);
+
+    // When exporting `HandoffMarkdown` in a workspace whose `.agent-ooo/checkpoint.capnp`
+    // already holds the sanitized, loop-severed arena for this session, render directly
+    // from the zero-copy Cap'n Proto checkpoint so severed loops stay gone upon resumption.
+    if format == ExportFormat::HandoffMarkdown {
+        if let Some(persisted_turns) =
+            read_checkpoint_arena_turns(workspace_dir, &session_id, max_turns)
+        {
+            let mut bytes_written = write_handoff_header(&session_id, workspace_dir, writer)?;
+            let mut lines_exported = 0usize;
+            for turn in &persisted_turns {
+                bytes_written += write_normalized_turn_handoff(turn, writer)?;
+                lines_exported += 1;
+            }
+            writer.flush()?;
+            return Ok(ExportReceipt {
+                session_id,
+                format: format.as_str().to_string(),
+                lines_exported,
+                redactions_count: 0,
+                spilled_payloads_count: 0,
+                bytes_written,
+            });
+        }
+    }
+
     let scan_target = discovery::resolve_scan_target(transcript_path);
 
     let file = File::open(&scan_target)?;
@@ -680,5 +788,59 @@ mod tests {
         assert!(!md_str.contains('('));
         assert!(!md_str.contains(')'));
         assert!(!md_str.contains('\u{2014}'));
+    }
+
+    #[test]
+    fn handoff_markdown_exports_loop_severed_capnp_arena_when_session_matches() {
+        let dir = TempDir::new().unwrap();
+        let transcript_path = dir.path().join("sess-capnp.jsonl");
+        // Write 3 duplicate failing retry loops to the raw transcript
+        let mut f = File::create(&transcript_path).unwrap();
+        writeln!(
+            f,
+            r#"{{"source":"SYSTEM","content":"Always keep builds deterministic."}}"#
+        )
+        .unwrap();
+        for idx in 0..3 {
+            writeln!(
+                f,
+                r#"{{"source":"MODEL","type":"PLANNER_RESPONSE","step_index":{step_a},"tool_calls":[{{"name":"run_command","args":{{"CommandLine":"cargo test"}}}}]}}"#,
+                step_a = idx * 2 + 1
+            )
+            .unwrap();
+            writeln!(
+                f,
+                r#"{{"source":"MODEL","type":"GENERIC","status":"ERROR","step_index":{step_b},"content":"Command exited with code 101.\nfailed attempt"}}"#,
+                step_b = idx * 2 + 2
+            )
+            .unwrap();
+        }
+
+        let (mut arena, detox_receipt) =
+            crate::detox::pipeline::execute_detox(&transcript_path, dir.path()).unwrap();
+        let reset_receipt = crate::reset::pipeline::execute_reset(
+            "sess-capnp",
+            dir.path(),
+            &mut arena,
+            &detox_receipt,
+        )
+        .unwrap();
+        assert_eq!(reset_receipt.severed_loops_count, 1);
+        assert!(reset_receipt.pruned_turns_count >= 2);
+
+        let mut md_buf: Vec<u8> = Vec::new();
+        let md_receipt = export_transcript(
+            &transcript_path,
+            dir.path(),
+            ExportFormat::HandoffMarkdown,
+            None,
+            &mut md_buf,
+        )
+        .unwrap();
+        let md_str = String::from_utf8(md_buf).unwrap();
+
+        // System turn (1) + first attempt (2) + final attempt (2) = 5 turns, instead of all 7
+        assert_eq!(md_receipt.lines_exported, 5);
+        assert!(md_str.contains("Always keep builds deterministic."));
     }
 }

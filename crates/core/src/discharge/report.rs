@@ -21,20 +21,27 @@ pub fn generate_spa_report(
     std::fs::create_dir_all(&agent_ooo_dir)?;
 
     // Measure before and after in the same unit (bytes of parsed transcript lines / 4).
-    // Only syntactic cleanse (redaction, ANSI, spillover) counts as realized savings.
-    // Arena compaction is reported as a preview: the checkpoint does not yet persist
-    // the retained turns, so evicted tokens are not a real reduction today.
+    // Now that `checkpoint.capnp` and `checkpoint.json` persist the sanitized, loop-severed
+    // Generation 0 and transient arena turns, realized footprint reduction covers both
+    // syntactic cleanse (redaction, ANSI, spillover) and generational arena compaction.
     let tokens_before = detox.raw_bytes as f64 / 4.0;
-    let tokens_after = detox.sanitized_bytes as f64 / 4.0;
+    let effective_after_bytes = if reset.retained_bytes > 0 {
+        reset.retained_bytes.min(detox.sanitized_bytes)
+    } else {
+        detox.sanitized_bytes
+    };
+    let tokens_after = effective_after_bytes as f64 / 4.0;
     let tokens_reduced = (tokens_before - tokens_after).max(0.0);
-    let compaction_preview_pct = if tokens_before > 0.0 {
-        (detox.evicted_tokens as f64 / tokens_before * 100.0).min(100.0)
+    let detox_only_tokens_reduced =
+        ((detox.raw_bytes as f64 / 4.0) - (detox.sanitized_bytes as f64 / 4.0)).max(0.0);
+    let detox_only_pct = if tokens_before > 0.0 {
+        (detox_only_tokens_reduced / tokens_before * 100.0).min(100.0)
     } else {
         0.0
     };
 
     let token_reduction_percentage = if tokens_before > 0.0 {
-        (tokens_reduced / tokens_before) * 100.0
+        ((tokens_reduced / tokens_before) * 100.0).min(100.0)
     } else {
         0.0
     };
@@ -77,6 +84,16 @@ pub fn generate_spa_report(
         CanaryStatus::Fail => "FAIL",
     };
 
+    let clean_model_id = triage
+        .vitals
+        .model_id
+        .replace(['(', ')'], "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let clean_harness = triage.vitals.agent_harness.replace(['(', ')'], "");
+    let clean_session_id = triage.session_id.replace(['(', ')'], "");
+
     let top_tools_formatted = if triage.vitals.top_tools.is_empty() {
         "none recorded".to_string()
     } else {
@@ -84,7 +101,13 @@ pub fn generate_spa_report(
             .vitals
             .top_tools
             .iter()
-            .map(|t| format!("`{}` at {} calls", t.tool_name, t.count))
+            .map(|t| {
+                format!(
+                    "`{}` at {} calls",
+                    t.tool_name.replace(['(', ')'], ""),
+                    t.count
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -155,21 +178,21 @@ status: {status}
 ## 4. Discharge: exit exam
 {canary_lines}
 ## 5. Economic impact
-* **Token reduction from Detox:** {reduction:.2}%
+* **Total state footprint reduction:** {reduction:.2}%, including {detox_pct:.2}% from Detox syntactic cleanse
 * **Net cost savings:** ${savings:.4} at an estimated $5.00 per 1M input tokens
 * **Developer triage time saved:** {hours:.1} hours
-* **Arena compaction preview:** {evicted} tokens, or {preview:.2}% of the session, sit in turns older than the last 100. Not yet persisted to the checkpoint, so not counted as savings.
+* **Persisted arena state:** {retained_tokens} refreshed tokens locked into `checkpoint.capnp`, with {evicted} older tokens archived via `LossManifest`
 
 > "Reset, refresh, relax."
 "#,
-        session_id = triage.session_id,
+        session_id = clean_session_id,
         status = status.as_str(),
         checkin_condition = triage.condition.as_str(),
         rot_index = triage.degradation_score,
         canary_status = if canaries_passed { "PASS" } else { "FAIL" },
         behavioral_summary = behavioral_summary,
-        harness = triage.vitals.agent_harness,
-        model = triage.vitals.model_id,
+        harness = clean_harness,
+        model = clean_model_id,
         total_turns = triage.vitals.total_turns,
         user_turns = triage.vitals.user_turns,
         assistant_turns = triage.vitals.assistant_turns,
@@ -194,10 +217,11 @@ status: {status}
         capnp = reset.checkpoint_capnp_bytes,
         canary_lines = canary_lines,
         reduction = token_reduction_percentage,
+        detox_pct = detox_only_pct,
         savings = net_savings_usd,
         hours = developer_hours_saved,
+        retained_tokens = effective_after_bytes / 4,
         evicted = detox.evicted_tokens,
-        preview = compaction_preview_pct,
         telemetry = execution_time_ms,
     );
 
@@ -264,6 +288,8 @@ mod tests {
         };
         let reset = ResetReceipt {
             severed_loops_count: 1,
+            pruned_turns_count: 2,
+            retained_bytes: 24_000,
             environment_registers_count: 4,
             checkpoint_capnp_bytes: 512,
             checkpoint_json_bytes: 640,

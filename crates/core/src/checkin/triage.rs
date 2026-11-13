@@ -12,22 +12,42 @@ pub fn calculate_triage(transcript_path: &Path, metrics: TranscriptMetrics) -> T
         .model_id
         .unwrap_or_else(|| "unspecified".to_string());
 
-    // 1. Detect repetitive tool call sequences (Loop Lock)
+    // 1. Detect repetitive tool+argument intent sequences (Loop Lock).
+    // Parallel reads of different files are normal; identical tool+argument calls
+    // repeated consecutively indicate a cognitive loop lock.
     let mut max_repetition = 0;
     let mut current_repetition = 0;
-    let mut last_tool = String::new();
+    let mut last_sig: Option<u64> = None;
 
-    for tool in &metrics.tool_calls {
-        if tool == &last_tool {
-            current_repetition += 1;
-            if current_repetition > max_repetition {
-                max_repetition = current_repetition;
+    if !metrics.tool_call_signatures.is_empty() {
+        for &sig in &metrics.tool_call_signatures {
+            if last_sig == Some(sig) {
+                current_repetition += 1;
+                if current_repetition > max_repetition {
+                    max_repetition = current_repetition;
+                }
+            } else {
+                last_sig = Some(sig);
+                current_repetition = 1;
+                if max_repetition == 0 {
+                    max_repetition = 1;
+                }
             }
-        } else {
-            last_tool = tool.clone();
-            current_repetition = 1;
-            if max_repetition == 0 {
-                max_repetition = 1;
+        }
+    } else {
+        let mut last_tool = String::new();
+        for tool in &metrics.tool_calls {
+            if tool == &last_tool {
+                current_repetition += 1;
+                if current_repetition > max_repetition {
+                    max_repetition = current_repetition;
+                }
+            } else {
+                last_tool = tool.clone();
+                current_repetition = 1;
+                if max_repetition == 0 {
+                    max_repetition = 1;
+                }
             }
         }
     }

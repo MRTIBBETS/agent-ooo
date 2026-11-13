@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+- **Founding Vision Alignment: Persisted Cap'n Proto Arena, Durable User Anchors, Intent-Signature Triage, Register Drift Canary, & CAS Recall:**
+  - Extended `schema/session_checkpoint.capnp` with `ArenaTurn` (`gen0Arena`, `transientArena`) and updated `reset::serializer::write_checkpoints` (`crates/core/src/reset/serializer.rs`) to persist sanitized, loop-severed Generation 0 and transient conversation turns (bounded to 16 Gen 0 turns, 256 transient turns, and 32 KB per turn) into `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`.
+  - Wired `ExportFormat::HandoffMarkdown` in `crates/core/src/detox/exporter.rs` to render directly from the persisted Cap'n Proto arena when `.agent-ooo/checkpoint.capnp` matches the target session, ensuring severed error loops stay pruned upon session resumption, and updated `discharge::report::generate_spa_report` (`crates/core/src/discharge/report.rs`) to report realized end-to-end state footprint reduction.
+  - Added a bounded 32-turn `user_anchors` ledger in `MemoryArena` (`crates/core/src/detox/arena.rs`) populated during `detox::pipeline::execute_detox` and scoped `reset::analyzer::extract_constraints_from_text` to `<USER_REQUEST>` payloads so durable user constraints from turn 1 survive transient ring eviction without matching harness metadata boilerplate.
+  - Upgraded `checkin::parser::parse_transcript` and `checkin::triage::calculate_triage` to hash `(tool_name, args)` FNV-1a intent signatures (`tool_call_signatures`) so legitimate parallel file reads/edits no longer trigger false `loop_lock_detected` streaks, and added Antigravity `<USER_SETTINGS_CHANGE>` model selection extraction.
+  - Hydrated `EnvironmentRegister.validIf` (`HEAD == <commit>`) and `sourceEventId` in `reset::serializer::write_checkpoints`, and added a 5th zero-LLM canary (`environment_register_freshness`) in `crates/core/src/discharge/canary.rs` that warns when live workspace git HEAD or branch has drifted from the checkpointed state.
+  - Implemented `detox::spillover::recall_spilled_payload` (`crates/core/src/detox/spillover.rs`) with strict hex-handle validation and bounded 32 KB slice seeking, exposed via `ooo discharge --recall <blake3>` and the `agent-ooo-mcp` `discharge` tool (`recall_handle`, `offset`, `max_bytes`), plus set `default-run = "ooo"` in `crates/cli/Cargo.toml`.
+  - *Self-Review Fix:* Sanitized dynamic `model_id`, `agent_harness`, `session_id`, and `tool_name` strings in `discharge::report::generate_spa_report` to strip parenthetical annotations (such as `(Medium)`) so `spa_report.md` preserves its strict zero-parentheses invariant on all harnesses, and rejected non-hex path characters in `sanitize_handle_filename` to prevent directory traversal on CAS recall.
+  - *Context:* Authored by Antigravity (Gemini 4 Carbon) using Rust 1.99.1 and Cap'n Proto 1.5.0.
+
 ## [0.2.0] - 2026-11-06
 
 ### Added

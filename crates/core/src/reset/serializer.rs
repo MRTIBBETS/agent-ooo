@@ -1,4 +1,5 @@
 use crate::detox::arena::MemoryArena;
+use crate::detox::exporter::{extract_normalized_turns, NormalizedTurn};
 use crate::detox::DetoxReceipt;
 use crate::reset::analyzer::ResetAnalysis;
 use crate::reset::registers::EnvironmentRegisters;
@@ -11,10 +12,50 @@ use std::io::BufReader;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const MAX_ARENA_TURN_BYTES: usize = 32 * 1024;
+const MAX_PERSISTED_GEN0_TURNS: usize = 16;
+const MAX_PERSISTED_TRANSIENT_TURNS: usize = 256;
+
+fn bounded_turn_text(text: &str) -> &str {
+    if text.len() <= MAX_ARENA_TURN_BYTES {
+        return text;
+    }
+    let mut end = MAX_ARENA_TURN_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+fn collect_bounded_turns<'a, I>(items: I, max_turns: usize) -> Vec<NormalizedTurn>
+where
+    I: IntoIterator<Item = &'a serde_json::Value>,
+{
+    let mut collected: Vec<NormalizedTurn> = Vec::new();
+    for val in items {
+        for mut turn in extract_normalized_turns(val) {
+            if turn.content.len() > MAX_ARENA_TURN_BYTES {
+                turn.content = format!(
+                    "{}\n[Truncated at 32KB checkpoint turn cap]",
+                    bounded_turn_text(&turn.content)
+                );
+            }
+            collected.push(turn);
+        }
+    }
+    if collected.len() > max_turns {
+        let drop_count = collected.len() - max_turns;
+        collected.drain(0..drop_count);
+    }
+    collected
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegisterSnapshot {
     pub key: String,
     pub value: String,
+    pub valid_if: String,
+    pub source_event_id: String,
     pub origin: String,
 }
 
@@ -43,7 +84,7 @@ pub fn write_checkpoints(
     arena: &MemoryArena,
     analysis: &ResetAnalysis,
     detox_receipt: &DetoxReceipt,
-) -> Result<(usize, usize), crate::OooError> {
+) -> Result<(usize, usize, usize), crate::OooError> {
     let agent_ooo_dir = base_dir.join(".agent-ooo");
     std::fs::create_dir_all(&agent_ooo_dir)?;
 
@@ -51,6 +92,15 @@ pub fn write_checkpoints(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
+
+    let gen0_turns = collect_bounded_turns(arena.gen0().iter(), MAX_PERSISTED_GEN0_TURNS);
+    let transient_turns =
+        collect_bounded_turns(arena.transient().iter(), MAX_PERSISTED_TRANSIENT_TURNS);
+    let retained_bytes: usize = gen0_turns
+        .iter()
+        .chain(transient_turns.iter())
+        .map(|t| t.role.len() + t.content.len() + t.tool_name.as_deref().map_or(0, str::len))
+        .sum();
 
     // 1. Cap'n Proto Checkpoint
     let mut message = Builder::new_default();
@@ -61,28 +111,47 @@ pub fn write_checkpoints(
 
     let mut reg_list = checkpoint.reborrow().init_registers(4);
 
+    let valid_head = if registers.git_commit.is_empty() {
+        "unbound".to_string()
+    } else {
+        format!("HEAD == {}", registers.git_commit)
+    };
+    let last_event_id = analysis
+        .events
+        .last()
+        .map(|e| e.tool_call_id.as_str())
+        .unwrap_or("session_snapshot");
+
     // Branch
     let mut r1 = reg_list.reborrow().get(0);
     r1.set_key("git_branch");
     r1.set_value(&registers.git_branch);
+    r1.set_valid_if(&valid_head);
+    r1.set_source_event_id(last_event_id);
     r1.set_origin(crate::schema::TrustOrigin::System);
 
     // Commit
     let mut r2 = reg_list.reborrow().get(1);
     r2.set_key("git_commit");
     r2.set_value(&registers.git_commit);
+    r2.set_valid_if(&valid_head);
+    r2.set_source_event_id(last_event_id);
     r2.set_origin(crate::schema::TrustOrigin::System);
 
     // Working Dir
     let mut r3 = reg_list.reborrow().get(2);
     r3.set_key("working_directory");
     r3.set_value(&registers.working_directory);
+    r3.set_valid_if("directory_exists");
+    r3.set_source_event_id(last_event_id);
     r3.set_origin(crate::schema::TrustOrigin::System);
 
     // Modified Files
     let mut r4 = reg_list.reborrow().get(3);
     r4.set_key("modified_files");
     r4.set_value(registers.modified_files.join(","));
+    r4.set_valid_if(&valid_head);
+    r4.set_source_event_id(last_event_id);
     r4.set_origin(crate::schema::TrustOrigin::System);
 
     // EventStream
@@ -118,6 +187,28 @@ pub fn write_checkpoints(
         handles.set(i as u32, handle.as_str());
     }
 
+    // Gen 0 Arena Turns
+    let mut gen0_list = checkpoint
+        .reborrow()
+        .init_gen0_arena(gen0_turns.len() as u32);
+    for (i, turn) in gen0_turns.iter().enumerate() {
+        let mut slot = gen0_list.reborrow().get(i as u32);
+        slot.set_role(&turn.role);
+        slot.set_content(&turn.content);
+        slot.set_tool_name(turn.tool_name.as_deref().unwrap_or(""));
+    }
+
+    // Transient Arena Turns (post loop-severing)
+    let mut transient_list = checkpoint
+        .reborrow()
+        .init_transient_arena(transient_turns.len() as u32);
+    for (i, turn) in transient_turns.iter().enumerate() {
+        let mut slot = transient_list.reborrow().get(i as u32);
+        slot.set_role(&turn.role);
+        slot.set_content(&turn.content);
+        slot.set_tool_name(turn.tool_name.as_deref().unwrap_or(""));
+    }
+
     let capnp_path = agent_ooo_dir.join("checkpoint.capnp");
     let mut capnp_file = File::create(&capnp_path)?;
     serialize_packed::write_message(&mut capnp_file, &message)?;
@@ -134,6 +225,8 @@ pub fn write_checkpoints(
         "session_id": session_id,
         "timestamp": timestamp,
         "severed_loops_count": analysis.severed_loops_count,
+        "pruned_turns_count": analysis.pruned_turns_count,
+        "retained_bytes": retained_bytes,
         "event_stream_count": analysis.events.len(),
         "constraints": constraint_strings,
         "loss_manifest": {
@@ -143,12 +236,15 @@ pub fn write_checkpoints(
         "registers": {
             "git_branch": registers.git_branch,
             "git_commit": registers.git_commit,
+            "head_timestamp": registers.head_timestamp,
             "working_directory": registers.working_directory,
             "modified_files": registers.modified_files,
         },
         "arena": {
-            "gen0_count": arena.gen0().len(),
-            "transient_count": arena.transient().len(),
+            "gen0_count": gen0_turns.len(),
+            "transient_count": transient_turns.len(),
+            "gen0_turns": gen0_turns,
+            "transient_turns": transient_turns,
         }
     });
 
@@ -157,7 +253,7 @@ pub fn write_checkpoints(
     std::fs::write(&json_path, &json_str)?;
     let json_bytes = json_str.len();
 
-    Ok((capnp_bytes, json_bytes))
+    Ok((capnp_bytes, json_bytes, retained_bytes))
 }
 
 /// Reads and verifies `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json` inside `base_dir`.
@@ -206,6 +302,20 @@ pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate
             .to_str()
             .map_err(|e| crate::OooError::General(format!("Invalid UTF-8 in register value: {e}")))?
             .to_string();
+        let valid_if = reg
+            .get_valid_if()?
+            .to_str()
+            .map_err(|e| {
+                crate::OooError::General(format!("Invalid UTF-8 in register valid_if: {e}"))
+            })?
+            .to_string();
+        let source_event_id = reg
+            .get_source_event_id()?
+            .to_str()
+            .map_err(|e| {
+                crate::OooError::General(format!("Invalid UTF-8 in register source_event_id: {e}"))
+            })?
+            .to_string();
         let origin = match reg.get_origin() {
             Ok(crate::schema::TrustOrigin::System) => "system",
             Ok(crate::schema::TrustOrigin::User) => "user",
@@ -214,7 +324,13 @@ pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate
             Err(_) => "unknown",
         }
         .to_string();
-        registers.push(RegisterSnapshot { key, value, origin });
+        registers.push(RegisterSnapshot {
+            key,
+            value,
+            valid_if,
+            source_event_id,
+            origin,
+        });
     }
 
     let event_stream = root.get_event_stream()?;
@@ -256,6 +372,9 @@ pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate
         recall_handles.push(h);
     }
 
+    let capnp_gen0_count = root.get_gen0_arena()?.len() as usize;
+    let capnp_transient_count = root.get_transient_arena()?.len() as usize;
+
     let json_str = std::fs::read_to_string(&json_path)?;
     let json_val: serde_json::Value = serde_json::from_str(&json_str)?;
 
@@ -267,16 +386,24 @@ pub fn inspect_checkpoint(base_dir: &Path) -> Result<CheckpointInspection, crate
         .get("severed_loops_count")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
-    let arena_gen0_count = json_val
-        .get("arena")
-        .and_then(|a| a.get("gen0_count"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as usize;
-    let arena_transient_count = json_val
-        .get("arena")
-        .and_then(|a| a.get("transient_count"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as usize;
+    let arena_gen0_count = if capnp_gen0_count > 0 {
+        capnp_gen0_count
+    } else {
+        json_val
+            .get("arena")
+            .and_then(|a| a.get("gen0_count"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize
+    };
+    let arena_transient_count = if capnp_transient_count > 0 {
+        capnp_transient_count
+    } else {
+        json_val
+            .get("arena")
+            .and_then(|a| a.get("transient_count"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize
+    };
 
     let canary_report =
         crate::discharge::canary::evaluate_canaries(&workspace_dir, &agent_ooo_dir)?;
@@ -320,6 +447,7 @@ mod tests {
             git_commit: "deadbeef".to_string(),
             working_directory: "/tmp/work".to_string(),
             modified_files: vec!["src/lib.rs".to_string()],
+            head_timestamp: 1700000000,
         };
         let mut arena = MemoryArena::new(10);
         arena.pin_gen0(json!({"source": "SYSTEM", "content": "rule"}));
@@ -353,7 +481,7 @@ mod tests {
             recall_handles: vec!["abcdef123456.bin".to_string()],
         };
 
-        let (capnp_len, json_len) = write_checkpoints(
+        let (capnp_len, json_len, retained_bytes) = write_checkpoints(
             dir.path(),
             "sess-42",
             &regs,
@@ -364,6 +492,7 @@ mod tests {
         .unwrap();
         assert!(capnp_len > 0);
         assert!(json_len > 0);
+        assert!(retained_bytes > 0);
 
         let inspection = inspect_checkpoint(dir.path()).unwrap();
         assert!(inspection.integrity_passed);

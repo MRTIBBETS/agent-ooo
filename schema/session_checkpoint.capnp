@@ -35,6 +35,12 @@ struct LossManifest {
   recallHandles @1 :List(Text);
 }
 
+struct ArenaTurn {
+  role @0 :Text;
+  content @1 :Text;
+  toolName @2 :Text;
+}
+
 struct SessionCheckpoint {
   sessionId @0 :Text;
   timestamp @1 :UInt64;
@@ -42,4 +48,6 @@ struct SessionCheckpoint {
   eventStream @3 :List(EventStream);
   constraintLedger @4 :List(NegativeConstraint);
   lossManifest @5 :LossManifest;
+  gen0Arena @6 :List(ArenaTurn);
+  transientArena @7 :List(ArenaTurn);
 }

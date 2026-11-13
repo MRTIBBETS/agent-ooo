@@ -188,13 +188,86 @@ fn evaluate_git_diff_canary(workspace_dir: &Path) -> CanaryFinding {
     }
 }
 
-/// Evaluates the 4 deterministic clinical and behavioral canaries against `checkpoint_dir`
+fn evaluate_register_freshness_canary(
+    workspace_dir: &Path,
+    expected_commit: &str,
+    expected_branch: &str,
+) -> CanaryFinding {
+    if expected_commit.is_empty() {
+        return CanaryFinding {
+            code: "environment_register_freshness".to_string(),
+            status: CanaryStatus::Pass,
+            message: "Checkpoint captured outside a git repository; skipped HEAD drift check."
+                .to_string(),
+        };
+    }
+
+    let current_head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(workspace_dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+    let Some(live_commit) = current_head.filter(|s| !s.is_empty()) else {
+        return CanaryFinding {
+            code: "environment_register_freshness".to_string(),
+            status: CanaryStatus::Pass,
+            message: "No live git HEAD found in workspace; skipped register drift check."
+                .to_string(),
+        };
+    };
+
+    if live_commit != expected_commit {
+        let short_expected: String = expected_commit.chars().take(8).collect();
+        let short_live: String = live_commit.chars().take(8).collect();
+        return CanaryFinding {
+            code: "environment_register_freshness".to_string(),
+            status: CanaryStatus::Warn,
+            message: format!(
+                "Workspace git HEAD drifted from checkpoint commit '{short_expected}' to '{short_live}'; run reset to refresh registers."
+            ),
+        };
+    }
+
+    let current_branch = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(workspace_dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    if !expected_branch.is_empty()
+        && !current_branch.is_empty()
+        && current_branch != expected_branch
+    {
+        return CanaryFinding {
+            code: "environment_register_freshness".to_string(),
+            status: CanaryStatus::Warn,
+            message: format!(
+                "Workspace git branch switched from '{expected_branch}' to '{current_branch}' since checkpoint."
+            ),
+        };
+    }
+
+    let short_commit: String = expected_commit.chars().take(8).collect();
+    CanaryFinding {
+        code: "environment_register_freshness".to_string(),
+        status: CanaryStatus::Pass,
+        message: format!("Workspace git registers match live HEAD at commit '{short_commit}'."),
+    }
+}
+
+/// Evaluates the 5 deterministic clinical and behavioral canaries against `checkpoint_dir`
 /// and `workspace_dir`.
 pub fn evaluate_canaries(
     workspace_dir: &Path,
     checkpoint_dir: &Path,
 ) -> Result<CanaryReport, crate::OooError> {
-    let mut findings = Vec::with_capacity(4);
+    let mut findings = Vec::with_capacity(5);
 
     let capnp_path = checkpoint_dir.join("checkpoint.capnp");
     let json_path = checkpoint_dir.join("checkpoint.json");
@@ -357,6 +430,28 @@ pub fn evaluate_canaries(
     // Canary 4: stub_or_conflict_injection
     findings.push(evaluate_git_diff_canary(workspace_dir));
 
+    // Canary 5: environment_register_freshness (verifies `validIf` register invariant)
+    let mut cp_commit = String::new();
+    let mut cp_branch = String::new();
+    for r in root.get_registers()?.iter() {
+        let key = r.get_key().ok().and_then(|k| k.to_str().ok()).unwrap_or("");
+        let val = r
+            .get_value()
+            .ok()
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if key == "git_commit" {
+            cp_commit = val.to_string();
+        } else if key == "git_branch" {
+            cp_branch = val.to_string();
+        }
+    }
+    findings.push(evaluate_register_freshness_canary(
+        workspace_dir,
+        &cp_commit,
+        &cp_branch,
+    ));
+
     let behavioral_status = if findings.iter().any(|f| f.status == CanaryStatus::Fail) {
         CanaryStatus::Fail
     } else if findings.iter().any(|f| f.status == CanaryStatus::Warn) {
@@ -393,6 +488,7 @@ mod tests {
             git_commit: "1234567".to_string(),
             working_directory: dir.to_string_lossy().to_string(),
             modified_files,
+            head_timestamp: 0,
         };
         let arena = MemoryArena::new(10);
         let analysis = ResetAnalysis {
@@ -402,7 +498,7 @@ mod tests {
             pruned_turns_count: 0,
         };
         let detox = DetoxReceipt::default();
-        write_checkpoints(dir, "sess-canary", &regs, &arena, &analysis, &detox).unwrap();
+        let _ = write_checkpoints(dir, "sess-canary", &regs, &arena, &analysis, &detox).unwrap();
     }
 
     #[test]
@@ -561,5 +657,8 @@ mod tests {
             .findings
             .iter()
             .any(|f| { f.code == "stub_or_conflict_injection" && f.status == CanaryStatus::Warn }));
+        assert!(report.findings.iter().any(|f| {
+            f.code == "environment_register_freshness" && f.status == CanaryStatus::Warn
+        }));
     }
 }

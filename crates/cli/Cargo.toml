@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Spa retreats for your AI. Reset, refresh, relax."
+default-run = "ooo"
 
 [lib]
 name = "agent_ooo_cli"

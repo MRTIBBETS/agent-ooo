@@ -12,6 +12,7 @@ pub struct TranscriptMetrics {
     pub total_turns: usize,
     pub role_distribution: HashMap<String, usize>,
     pub tool_calls: Vec<String>,
+    pub tool_call_signatures: Vec<u64>,
     pub total_tool_calls_count: usize,
     pub total_input_tokens: usize, // Estimation based on content length or actual field if present
     pub model_id: Option<String>,
@@ -23,10 +24,50 @@ pub struct TranscriptMetrics {
     pub output_bytes: usize,
 }
 
-fn record_tool_call(metrics: &mut TranscriptMetrics, tool_name: &str) {
+fn fnv1a_signature(tool_name: &str, args_str: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in tool_name
+        .as_bytes()
+        .iter()
+        .chain([0xff].iter())
+        .chain(args_str.as_bytes().iter().take(4096))
+    {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn extract_antigravity_model_setting(text: &str) -> Option<String> {
+    let tag_start = text.rfind("<USER_SETTINGS_CHANGE>")?;
+    let tag_slice = &text[tag_start..];
+    let marker = "Model Selection`";
+    let idx = tag_slice.find(marker)?;
+    let rest = &tag_slice[idx + marker.len()..];
+    let to_idx = rest.find(" to ")?;
+    let after_to = &rest[to_idx + 4..];
+    let end = after_to
+        .find(['.', '\n', '<'])
+        .unwrap_or_else(|| after_to.len().min(64));
+    let raw = after_to[..end].trim();
+    let candidate = match raw.find('(') {
+        Some(paren_idx) => raw[..paren_idx].trim(),
+        None => raw,
+    };
+    if candidate.is_empty() || candidate.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(candidate.to_string())
+    }
+}
+
+fn record_tool_call(metrics: &mut TranscriptMetrics, tool_name: &str, args_str: &str) {
     metrics.total_tool_calls_count += 1;
     if metrics.tool_calls.len() < MAX_STORED_TOOL_CALLS {
         metrics.tool_calls.push(tool_name.to_string());
+        metrics
+            .tool_call_signatures
+            .push(fnv1a_signature(tool_name, args_str));
     }
     if let Some(count) = metrics.tool_frequency.get_mut(tool_name) {
         *count += 1;
@@ -146,17 +187,6 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
             metrics.total_turns += 1;
             let message = value.get("message").filter(|m| m.is_object());
 
-            if metrics.model_id.is_none() {
-                if let Some(model_str) = message
-                    .and_then(|m| m.get("model"))
-                    .or_else(|| value.get("model"))
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                {
-                    metrics.model_id = Some(model_str.to_string());
-                }
-            }
-
             let is_antigravity_tool_result = step_type.eq_ignore_ascii_case("GENERIC");
 
             // Count roles (e.g., source: "USER", "MODEL", "SYSTEM" or role: "user", "assistant")
@@ -176,6 +206,23 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
             let is_user_role = matches!(role.as_str(), "USER" | "USER_EXPLICIT" | "USER_INPUT");
             let is_assistant_role =
                 matches!(role.as_str(), "MODEL" | "ASSISTANT" | "PLANNER_RESPONSE");
+
+            if let Some(model_str) = message
+                .and_then(|m| m.get("model"))
+                .or_else(|| value.get("model"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                metrics.model_id = Some(model_str.to_string());
+            } else if is_user_role {
+                if let Some(content_str) = value.get("content").and_then(|v| v.as_str()) {
+                    if content_str.contains("<USER_SETTINGS_CHANGE>") {
+                        if let Some(selected) = extract_antigravity_model_setting(content_str) {
+                            metrics.model_id = Some(selected);
+                        }
+                    }
+                }
+            }
 
             if is_user_role {
                 metrics.user_turns += 1;
@@ -205,24 +252,28 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
             // Check Antigravity format `tool_calls`
             if let Some(tool_calls) = value.get("tool_calls").and_then(|v| v.as_array()) {
                 for tool_call in tool_calls {
+                    let args_str = tool_call
+                        .get("arguments")
+                        .or_else(|| tool_call.get("args"))
+                        .or_else(|| tool_call.get("function").and_then(|f| f.get("arguments")))
+                        .map(|v| v.to_string())
+                        .unwrap_or_default();
+                    let arg_len = args_str.len();
+                    tool_args_bytes += arg_len;
+                    metrics.output_bytes += arg_len;
+
                     if let Some(tool_name) = tool_call
                         .get("name")
                         .or_else(|| tool_call.get("ToolName"))
                         .and_then(|v| v.as_str())
                     {
-                        record_tool_call(&mut metrics, tool_name);
+                        record_tool_call(&mut metrics, tool_name, &args_str);
                     } else if let Some(function) =
                         tool_call.get("function").and_then(|v| v.as_object())
                     {
                         if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
-                            record_tool_call(&mut metrics, name);
+                            record_tool_call(&mut metrics, name, &args_str);
                         }
-                    }
-                    if let Some(args) = tool_call.get("arguments").or_else(|| tool_call.get("args"))
-                    {
-                        let arg_len = args.to_string().len();
-                        tool_args_bytes += arg_len;
-                        metrics.output_bytes += arg_len;
                     }
                 }
             }
@@ -252,11 +303,13 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
                         let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
                         match block_type {
                             "tool_use" => {
+                                let args_str = block
+                                    .get("input")
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_default();
+                                metrics.output_bytes += args_str.len();
                                 if let Some(name) = block.get("name").and_then(|v| v.as_str()) {
-                                    record_tool_call(&mut metrics, name);
-                                }
-                                if let Some(input) = block.get("input") {
-                                    metrics.output_bytes += input.to_string().len();
+                                    record_tool_call(&mut metrics, name, &args_str);
                                 }
                             }
                             "tool_result" => {
@@ -380,5 +433,27 @@ mod tests {
         assert_eq!(metrics.role_distribution.get("TOOL"), Some(&1));
         assert_eq!(metrics.total_tool_calls_count, 1);
         assert_eq!(metrics.failed_tool_calls, 1);
+    }
+
+    #[test]
+    fn test_antigravity_model_extraction_and_signature_streaks() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_REQUEST>Hi</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from Gemini 4 Argon (Medium) to Gemini 4 Carbon (Medium). No need to comment.\n</USER_SETTINGS_CHANGE>"}}"#
+        )
+        .unwrap();
+        // Parallel reads of distinct files must produce distinct intent signatures (streak = 1)
+        writeln!(
+            file,
+            r#"{{"source":"MODEL","type":"PLANNER_RESPONSE","tool_calls":[{{"name":"read_file","args":{{"Path":"a.rs"}}}},{{"name":"read_file","args":{{"Path":"b.rs"}}}},{{"name":"read_file","args":{{"Path":"c.rs"}}}}]}}"#
+        )
+        .unwrap();
+
+        let metrics = parse_transcript(file.path()).unwrap();
+        assert_eq!(metrics.model_id.as_deref(), Some("Gemini 4 Carbon"));
+        let receipt = crate::checkin::triage::calculate_triage(file.path(), metrics);
+        assert!(!receipt.loop_lock_detected);
+        assert_eq!(receipt.repetition_count, 1);
     }
 }
