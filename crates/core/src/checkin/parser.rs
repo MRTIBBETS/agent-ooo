@@ -22,6 +22,10 @@ pub struct TranscriptMetrics {
     pub tool_frequency: HashMap<String, usize>,
     pub thinking_bytes: usize,
     pub output_bytes: usize,
+    pub api_input_tokens: u64,
+    pub api_cache_read_tokens: u64,
+    pub api_output_tokens: u64,
+    pub api_usage_turns: usize,
 }
 
 fn fnv1a_signature(tool_name: &str, args_str: &str) -> u64 {
@@ -228,6 +232,35 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
                 metrics.user_turns += 1;
             } else if is_assistant_role {
                 metrics.assistant_turns += 1;
+            }
+
+            // Capture exact API token billing fields when present on model turns
+            // (Antigravity top-level `input_tokens`/`cache_read_tokens`/`output_tokens`
+            // or Claude Code `message.usage.input_tokens` / `cache_read_input_tokens` / `output_tokens`).
+            let usage_obj = message
+                .and_then(|m| m.get("usage"))
+                .or_else(|| value.get("usage"));
+            let turn_in_tok = value
+                .get("input_tokens")
+                .or_else(|| usage_obj.and_then(|u| u.get("input_tokens")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let turn_cache_tok = value
+                .get("cache_read_tokens")
+                .or_else(|| usage_obj.and_then(|u| u.get("cache_read_input_tokens")))
+                .or_else(|| usage_obj.and_then(|u| u.get("cached_tokens")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let turn_out_tok = value
+                .get("output_tokens")
+                .or_else(|| usage_obj.and_then(|u| u.get("output_tokens")))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            if turn_in_tok > 0 || turn_cache_tok > 0 || turn_out_tok > 0 {
+                metrics.api_input_tokens += turn_in_tok;
+                metrics.api_cache_read_tokens += turn_cache_tok;
+                metrics.api_output_tokens += turn_out_tok;
+                metrics.api_usage_turns += 1;
             }
 
             *metrics.role_distribution.entry(role).or_insert(0) += 1;

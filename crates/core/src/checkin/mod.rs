@@ -45,6 +45,10 @@ pub struct AgentVitals {
     pub top_tools: Vec<ToolUsageStat>,
     pub thinking_ratio_pct: f64,
     pub avg_tokens_per_turn: usize,
+    pub api_input_tokens: u64,
+    pub api_cache_read_tokens: u64,
+    pub api_output_tokens: u64,
+    pub estimated_session_cost_usd: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

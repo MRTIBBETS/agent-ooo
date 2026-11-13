@@ -117,6 +117,18 @@ pub fn run() -> anyhow::Result<()> {
                 receipt.vitals.total_tool_calls,
                 receipt.vitals.failed_tool_calls
             );
+            if receipt.vitals.api_input_tokens > 0
+                || receipt.vitals.api_cache_read_tokens > 0
+                || receipt.vitals.api_output_tokens > 0
+            {
+                println!(
+                    "API Ledger: {} in | {} cache_read | {} out (~${:.4} est. session spend)",
+                    receipt.vitals.api_input_tokens,
+                    receipt.vitals.api_cache_read_tokens,
+                    receipt.vitals.api_output_tokens,
+                    receipt.vitals.estimated_session_cost_usd
+                );
+            }
         }
         Some(Commands::Detox { transcript }) => {
             println!(

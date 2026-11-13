@@ -2,6 +2,30 @@ use crate::checkin::parser::TranscriptMetrics;
 use crate::checkin::{AgentVitals, ToolUsageStat, TriageReceipt, WellnessTier};
 use std::path::Path;
 
+fn estimate_api_cost_usd(
+    model_id: &str,
+    input_tokens: u64,
+    cache_read_tokens: u64,
+    output_tokens: u64,
+) -> f64 {
+    let lower = model_id.to_ascii_lowercase();
+    // Per-1M token reference rates (USD): (uncached_input, cache_read, output)
+    let (in_rate, cache_rate, out_rate) = if lower.contains("flash") || lower.contains("lite") {
+        (0.30, 0.03, 2.50)
+    } else if lower.contains("opus") {
+        (15.00, 1.50, 75.00)
+    } else if lower.contains("sonnet") || lower.contains("argon") {
+        (3.00, 0.30, 15.00)
+    } else {
+        // High-reasoning tier default (Carbon / Pro)
+        (2.50, 0.25, 15.00)
+    };
+
+    (input_tokens as f64 / 1_000_000.0) * in_rate
+        + (cache_read_tokens as f64 / 1_000_000.0) * cache_rate
+        + (output_tokens as f64 / 1_000_000.0) * out_rate
+}
+
 /// Analyzes the parsed metrics to detect context rot, cognitive loops, and guest vitals.
 pub fn calculate_triage(transcript_path: &Path, metrics: TranscriptMetrics) -> TriageReceipt {
     let path_str = transcript_path.to_string_lossy().to_string();
@@ -111,6 +135,13 @@ pub fn calculate_triage(transcript_path: &Path, metrics: TranscriptMetrics) -> T
         WellnessTier::Fatigued
     };
 
+    let estimated_session_cost_usd = estimate_api_cost_usd(
+        &model_id,
+        metrics.api_input_tokens,
+        metrics.api_cache_read_tokens,
+        metrics.api_output_tokens,
+    );
+
     let vitals = AgentVitals {
         agent_harness,
         model_id,
@@ -123,6 +154,10 @@ pub fn calculate_triage(transcript_path: &Path, metrics: TranscriptMetrics) -> T
         top_tools,
         thinking_ratio_pct,
         avg_tokens_per_turn,
+        api_input_tokens: metrics.api_input_tokens,
+        api_cache_read_tokens: metrics.api_cache_read_tokens,
+        api_output_tokens: metrics.api_output_tokens,
+        estimated_session_cost_usd,
     };
 
     TriageReceipt {

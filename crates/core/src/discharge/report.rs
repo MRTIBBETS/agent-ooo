@@ -161,6 +161,7 @@ status: {status}
 * **Most visited tools:** {top_tools_formatted}
 * **Thinking balance:** {thinking_pct:.1}% internal reasoning vs. {output_pct:.1}% direct output
 * **Token pace:** {avg_tokens} average tokens per turn across {total_tokens} total input tokens
+* **API billing ledger:** {api_in} uncached input tokens, {api_cache} cache-read tokens, and {api_out} output tokens at an estimated ${api_cost:.4} session spend
 
 ## 2. Detox: deep-tissue cleanse
 * **Raw footprint:** {raw} bytes
@@ -205,6 +206,10 @@ status: {status}
         output_pct = output_pct,
         avg_tokens = triage.vitals.avg_tokens_per_turn,
         total_tokens = triage.total_input_tokens,
+        api_in = triage.vitals.api_input_tokens,
+        api_cache = triage.vitals.api_cache_read_tokens,
+        api_out = triage.vitals.api_output_tokens,
+        api_cost = triage.vitals.estimated_session_cost_usd,
         raw = detox.raw_bytes,
         sanitized = detox.sanitized_bytes,
         secrets = detox.redactions_count,
@@ -275,6 +280,10 @@ mod tests {
                 ],
                 thinking_ratio_pct: 35.0,
                 avg_tokens_per_turn: 2400,
+                api_input_tokens: 12_000,
+                api_cache_read_tokens: 36_000,
+                api_output_tokens: 4_000,
+                estimated_session_cost_usd: 0.25,
             },
         };
         let detox = DetoxReceipt {
