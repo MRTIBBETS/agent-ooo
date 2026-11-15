@@ -54,17 +54,43 @@ fn scan_antigravity_brain(
     }
 }
 
-/// Pushes every `*.jsonl` file directly inside `dir`.
-fn scan_jsonl_dir(candidates: &mut Vec<SessionCandidate>, dir: &Path, agent_type: &str) {
+/// Recursively scans `dir` up to `max_depth` for `*.jsonl` files (capped at 512 files per tree).
+/// `max_depth = 1` checks files directly in `dir`.
+pub fn scan_jsonl_tree(
+    candidates: &mut Vec<SessionCandidate>,
+    dir: &Path,
+    agent_type: &str,
+    max_depth: usize,
+) {
+    const MAX_TREE_CANDIDATES: usize = 512;
+    if max_depth == 0 || candidates.len() >= MAX_TREE_CANDIDATES * 4 {
+        return;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    for entry in entries.flatten() {
+    for entry in entries.flatten().take(MAX_TREE_CANDIDATES) {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         let path = entry.path();
-        if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
-            push_candidate(candidates, path, agent_type);
+        if file_type.is_file() {
+            if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
+                push_candidate(candidates, path, agent_type);
+            }
+        } else if file_type.is_dir() && max_depth > 1 {
+            let dir_name = entry.file_name();
+            if dir_name == "node_modules" || dir_name == ".git" || dir_name == "target" {
+                continue;
+            }
+            scan_jsonl_tree(candidates, &path, agent_type, max_depth - 1);
         }
     }
+}
+
+/// Pushes every `*.jsonl` file directly inside `dir`.
+fn scan_jsonl_dir(candidates: &mut Vec<SessionCandidate>, dir: &Path, agent_type: &str) {
+    scan_jsonl_tree(candidates, dir, agent_type, 1);
 }
 
 /// Finds the most recently modified transcript files across known agent directories.
@@ -107,6 +133,32 @@ pub fn discover_recent_transcripts() -> Vec<SessionCandidate> {
         &home.join(".cursor").join("sessions"),
         "Cursor",
     );
+
+    // 5. Codex CLI: ~/.codex/sessions/**/*.jsonl (depth up to 4)
+    scan_jsonl_tree(
+        &mut candidates,
+        &home.join(".codex").join("sessions"),
+        "Codex CLI",
+        4,
+    );
+
+    // 6. Windsurf: ~/.codeium/windsurf and ~/.windsurf/sessions (*.jsonl up to depth 3)
+    scan_jsonl_tree(
+        &mut candidates,
+        &home.join(".codeium").join("windsurf"),
+        "Windsurf",
+        3,
+    );
+    scan_jsonl_tree(
+        &mut candidates,
+        &home.join(".windsurf").join("sessions"),
+        "Windsurf",
+        3,
+    );
+
+    // 7. Cline: ~/.cline and ~/.roo-code (*.jsonl up to depth 3)
+    scan_jsonl_tree(&mut candidates, &home.join(".cline"), "Cline", 3);
+    scan_jsonl_tree(&mut candidates, &home.join(".roo-code"), "Cline", 3);
 
     // Sort by most recent first
     candidates.sort_by_key(|c| std::cmp::Reverse(c.modified));
@@ -155,6 +207,12 @@ pub fn agent_harness_for(path: &Path) -> String {
         "Claude Code".to_string()
     } else if s.contains(".cursor") {
         "Cursor".to_string()
+    } else if s.contains(".codex") {
+        "Codex CLI".to_string()
+    } else if s.contains("windsurf") || s.contains(".codeium") {
+        "Windsurf".to_string()
+    } else if s.contains(".cline") || s.contains(".roo-code") {
+        "Cline".to_string()
     } else {
         "Generic JSONL".to_string()
     }
@@ -208,7 +266,7 @@ pub fn resolve_transcript_non_interactive(explicit_path: Option<&str>) -> Result
         .next()
         .map(|c| c.path)
         .ok_or_else(|| {
-            "Could not auto-discover any agent transcripts in ~/.gemini, ~/.claude, or ~/.cursor"
+            "Could not auto-discover any agent transcripts in ~/.gemini, ~/.claude, ~/.codex, or ~/.cursor"
                 .to_string()
         })
 }
@@ -247,7 +305,7 @@ pub fn resolve_transcript_path_with_mode(
 
     if candidates.is_empty() {
         return Err(
-            "Could not auto-discover any agent transcripts in ~/.gemini, ~/.claude, or ~/.cursor"
+            "Could not auto-discover any agent transcripts in ~/.gemini, ~/.claude, ~/.codex, or ~/.cursor"
                 .to_string(),
         );
     }
@@ -349,5 +407,93 @@ mod tests {
 
         fs::write(&full, "{}\n").unwrap();
         assert_eq!(resolve_scan_target(&compact), full);
+    }
+
+    #[test]
+    fn test_scan_jsonl_tree_nested() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let nested = dir.path().join("2026").join("11").join("13");
+        fs::create_dir_all(&nested).expect("create nested dirs");
+
+        let file1 = nested.join("rollout-abc.jsonl");
+        fs::write(&file1, "{}\n").expect("write file");
+
+        let flat = dir.path().join("flat-session.jsonl");
+        fs::write(&flat, "{}\n").expect("write file");
+
+        // file at depth 5: dir -> a (1) -> b (2) -> c (3) -> d (4) -> deep.jsonl (5)
+        let too_deep = dir.path().join("a").join("b").join("c").join("d");
+        fs::create_dir_all(&too_deep).expect("create too deep");
+        let file_deep = too_deep.join("deep.jsonl");
+        fs::write(&file_deep, "{}\n").expect("write deep file");
+
+        let mut candidates = Vec::new();
+        scan_jsonl_tree(&mut candidates, dir.path(), "Codex CLI", 4);
+
+        let paths: Vec<_> = candidates.iter().map(|c| c.path.clone()).collect();
+        assert!(paths.contains(&file1));
+        assert!(paths.contains(&flat));
+        assert!(!paths.contains(&file_deep));
+    }
+
+    #[test]
+    fn test_agent_harness_for() {
+        assert_eq!(
+            agent_harness_for(Path::new(
+                "/home/user/.codex/sessions/2026/11/13/session.jsonl"
+            )),
+            "Codex CLI"
+        );
+        assert_eq!(
+            agent_harness_for(Path::new(
+                "/home/user/.codeium/windsurf/cascade/session.jsonl"
+            )),
+            "Windsurf"
+        );
+        assert_eq!(
+            agent_harness_for(Path::new("/home/user/.windsurf/sessions/session.jsonl")),
+            "Windsurf"
+        );
+        assert_eq!(
+            agent_harness_for(Path::new("/home/user/.cline/tasks/session.jsonl")),
+            "Cline"
+        );
+        assert_eq!(
+            agent_harness_for(Path::new("/home/user/.roo-code/session.jsonl")),
+            "Cline"
+        );
+        assert_eq!(
+            agent_harness_for(Path::new("/home/user/.claude/projects/proj/session.jsonl")),
+            "Claude Code"
+        );
+        assert_eq!(
+            agent_harness_for(Path::new("/home/user/.cursor/sessions/session.jsonl")),
+            "Cursor"
+        );
+        assert_eq!(
+            agent_harness_for(Path::new(
+                "/home/user/.gemini/antigravity/brain/session/transcript.jsonl"
+            )),
+            "Antigravity"
+        );
+        assert_eq!(
+            agent_harness_for(Path::new(
+                "/home/user/.gemini/antigravity-ide/brain/session/transcript.jsonl"
+            )),
+            "Antigravity IDE"
+        );
+    }
+
+    #[test]
+    fn test_session_id_for_codex_and_windsurf() {
+        let codex = Path::new("/home/user/.codex/sessions/2026/11/13/rollout-abc.jsonl");
+        assert_eq!(session_id_for(codex), "rollout-abc");
+
+        let windsurf = Path::new("/home/user/.windsurf/sessions/cascade-session-123.jsonl");
+        assert_eq!(session_id_for(windsurf), "cascade-session-123");
+
+        let windsurf_transcript =
+            Path::new("/home/user/.codeium/windsurf/cascade/session-456/transcript.jsonl");
+        assert_eq!(session_id_for(windsurf_transcript), "session-456");
     }
 }

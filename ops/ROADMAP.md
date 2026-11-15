@@ -6,7 +6,7 @@ All items are ranked by **user value x distribution leverage / complexity**. Aut
 
 - [x] **A0. Founding Vision Alignment & Native Token Spend Telemetry (`Cycle 0`):**
   - Persist `gen0Arena` + `transientArena` into `checkpoint.capnp`, durable 32-turn user anchors, FNV-1a `(tool, args)` loop triage, `environment_register_freshness` git drift canary, `ooo discharge --recall <blake3>`, and API token/spend ledger in `AgentVitals`.
-- [ ] **A1. Machine-Wide CLI Secret Audit (`ooo detox --all`) & Multi-Harness Discovery (`Cycle 1`):**
+- [x] **A1. Machine-Wide CLI Secret Audit (`ooo detox --all`) & Multi-Harness Discovery (`Cycle 1`):**
   - Bring MCP's `all_sessions: true` machine-wide secret scan to the CLI (`ooo detox --all`) with a crisp summary table across every session on disk.
   - Expand `checkin::discovery` to auto-discover **OpenAI Codex CLI** (`~/.codex/sessions`), **Windsurf** (`~/.codeium/windsurf`), and **Cline / Roo Code** transcripts with unit tests.
 - [ ] **A2. Turnkey Agent Skill & Lifecycle Hook Bundle (`Cycle 2`):**

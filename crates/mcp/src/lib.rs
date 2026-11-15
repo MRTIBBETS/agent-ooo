@@ -132,7 +132,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "checkin",
-            "description": "Step 1: Parse transcripts and diagnose context rot, or list discovered sessions across Antigravity, Antigravity IDE, Claude Code, and Cursor.",
+            "description": "Step 1: Parse transcripts and diagnose context rot, or list discovered sessions across Antigravity, Antigravity IDE, Claude Code, Codex CLI, Cursor, Windsurf, and Cline.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -164,7 +164,7 @@ fn tool_definitions() -> Value {
                     },
                     "all_sessions": {
                         "type": "boolean",
-                        "description": "When true, scans all discovered sessions across Antigravity, Antigravity IDE, Claude Code, and Cursor for leaked secrets."
+                        "description": "When true, scans all discovered sessions across Antigravity, Antigravity IDE, Claude Code, Codex CLI, Cursor, Windsurf, and Cline for leaked secrets."
                     },
                     "workspace_dir": {
                         "type": "string",

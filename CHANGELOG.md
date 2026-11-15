@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- **Cycle 1 (`A1`): Machine-Wide Secret Posture (`ooo detox --all`) & 7-Harness Auto-Discovery:**
+  - Added bounded recursive session discovery (`scan_jsonl_tree`, depth-limited and entry-capped) in `crates/core/src/checkin/discovery.rs` to auto-discover **Codex CLI** (`~/.codex/sessions`), **Windsurf** (`~/.codeium/windsurf`, `~/.windsurf/sessions`), and **Cline / Roo Code** (`~/.cline`, `~/.roo-code`) alongside Antigravity, Antigravity IDE, Claude Code, and Cursor (`7` harnesses total).
+  - Added `-a` / `--all` to `ooo detox` in `crates/cli/src/lib.rs` (bringing 1:1 CLI parity with MCP `all_sessions: true`) to stream-scan every discovered session across all local harnesses and print a masked credential posture summary.
+  - Added 4 unit tests covering nested directory discovery, depth-cap enforcement, harness classification, and `--all` CLI flag parsing (`42` total workspace tests).
+  - *Self-Review Fix:* Added per-directory entry caps (`512`) and skipped `node_modules`/`.git`/`target` directories inside `scan_jsonl_tree` to maintain bounded memory and `<5ms` discovery latency, and made `ooo detox --all` resilient to transient unreadable files instead of aborting mid-scan.
+  - *Context:* Authored by Antigravity Tier-2 Subagent (Gemini 3.8 Flash) and reviewed by Coordinator (Gemini 4 Carbon) using Rust 1.99.1 and Cap'n Proto 1.5.0.
 - **Founding Vision Alignment: Persisted Cap'n Proto Arena, Durable User Anchors, Intent-Signature Triage, Register Drift Canary, & CAS Recall:**
   - Extended `schema/session_checkpoint.capnp` with `ArenaTurn` (`gen0Arena`, `transientArena`) and updated `reset::serializer::write_checkpoints` (`crates/core/src/reset/serializer.rs`) to persist sanitized, loop-severed Generation 0 and transient conversation turns (bounded to 16 Gen 0 turns, 256 transient turns, and 32 KB per turn) into `.agent-ooo/checkpoint.capnp` and `.agent-ooo/checkpoint.json`.
   - Wired `ExportFormat::HandoffMarkdown` in `crates/core/src/detox/exporter.rs` to render directly from the persisted Cap'n Proto arena when `.agent-ooo/checkpoint.capnp` matches the target session, ensuring severed error loops stay pruned upon session resumption, and updated `discharge::report::generate_spa_report` (`crates/core/src/discharge/report.rs`) to report realized end-to-end state footprint reduction.

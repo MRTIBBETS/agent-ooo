@@ -42,6 +42,9 @@ pub enum Commands {
     Detox {
         /// Optional path to a specific transcript file (.jsonl)
         transcript: Option<String>,
+        /// Scan all discovered sessions across all local agent harnesses for leaked credentials
+        #[arg(short, long)]
+        all: bool,
     },
     /// Step 3: Sever error loops and write zero-copy checkpoints.
     #[command(display_order = 4)]
@@ -130,11 +133,83 @@ pub fn run() -> anyhow::Result<()> {
                 );
             }
         }
-        Some(Commands::Detox { transcript }) => {
+        Some(Commands::Detox { transcript, all }) => {
             println!(
                 "{} Syntactic cleanse initiated...",
                 "[DETOX]".bold().yellow()
             );
+            if *all {
+                let candidates = discovery::discover_recent_transcripts();
+                let mut sessions_with_secrets = 0usize;
+                let mut total_occurrences = 0usize;
+                let mut reports = Vec::new();
+
+                let mut skipped_sessions = 0usize;
+                for candidate in &candidates {
+                    match agent_ooo_core::detox::sanitizer::scan_transcript_secrets(&candidate.path)
+                    {
+                        Ok(report) => {
+                            if report.distinct_secrets > 0 {
+                                sessions_with_secrets += 1;
+                                total_occurrences += report.total_occurrences;
+                                reports.push((candidate, report));
+                            }
+                        }
+                        Err(_) => {
+                            skipped_sessions += 1;
+                        }
+                    }
+                }
+
+                if skipped_sessions > 0 {
+                    println!(
+                        "Sessions Scanned: {} ({} unreadable skipped) | Sessions With Secrets: {} | Total Occurrences: {}",
+                        candidates.len().saturating_sub(skipped_sessions),
+                        skipped_sessions,
+                        sessions_with_secrets,
+                        total_occurrences
+                    );
+                } else {
+                    println!(
+                        "Sessions Scanned: {} | Sessions With Secrets: {} | Total Occurrences: {}",
+                        candidates.len(),
+                        sessions_with_secrets,
+                        total_occurrences
+                    );
+                }
+
+                if sessions_with_secrets == 0 {
+                    println!(
+                        "{}",
+                        "Clean bill of health: No leaked secrets detected across any discovered sessions."
+                            .green()
+                            .bold()
+                    );
+                } else {
+                    for (candidate, report) in &reports {
+                        let session_id = discovery::session_id_for(&candidate.path);
+                        println!(
+                            "\n[{}] {} ({} distinct, {} total)",
+                            candidate.agent_type.bold(),
+                            session_id,
+                            report.distinct_secrets,
+                            report.total_occurrences
+                        );
+                        for finding in &report.findings {
+                            println!(
+                                "  * {} [{}]: {} occurrence(s) (lines {}..{})",
+                                finding.secret_type.bold(),
+                                finding.masked_preview,
+                                finding.occurrences,
+                                finding.first_line,
+                                finding.last_line
+                            );
+                        }
+                    }
+                }
+                return Ok(());
+            }
+
             let path =
                 discovery::resolve_transcript_path_with_mode(transcript.as_deref(), cli.latest)
                     .map_err(|e| anyhow::anyhow!(e))?;
@@ -441,4 +516,42 @@ pub fn run() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_detox_all_flag_parsing() {
+        let args = ["agent-ooo", "detox", "--all"];
+        let cli = Cli::try_parse_from(args).expect("parse detox --all");
+        match cli.command {
+            Some(Commands::Detox { transcript, all }) => {
+                assert!(all);
+                assert_eq!(transcript, None);
+            }
+            _ => panic!("Expected Commands::Detox"),
+        }
+
+        let args_short = ["agent-ooo", "detox", "-a"];
+        let cli_short = Cli::try_parse_from(args_short).expect("parse detox -a");
+        match cli_short.command {
+            Some(Commands::Detox { transcript, all }) => {
+                assert!(all);
+                assert_eq!(transcript, None);
+            }
+            _ => panic!("Expected Commands::Detox"),
+        }
+
+        let args_path = ["agent-ooo", "detox", "custom.jsonl"];
+        let cli_path = Cli::try_parse_from(args_path).expect("parse detox path");
+        match cli_path.command {
+            Some(Commands::Detox { transcript, all }) => {
+                assert!(!all);
+                assert_eq!(transcript, Some("custom.jsonl".to_string()));
+            }
+            _ => panic!("Expected Commands::Detox"),
+        }
+    }
 }
