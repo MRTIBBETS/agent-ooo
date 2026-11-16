@@ -85,12 +85,32 @@ pub enum Commands {
     /// Update agent-ooo to the latest version.
     #[command(display_order = 7)]
     Update,
+    /// Step 8: Initialize turnkey agent skill bundle and git lifecycle hooks.
+    #[command(display_order = 8, alias = "init-hooks")]
+    InitSkill {
+        /// Destination directory for the skill bundle (defaults to ./skills/agent-ooo)
+        #[arg(short, long)]
+        target: Option<String>,
+        /// Target harness for instructions (antigravity, claude, cursor, codex, git, all)
+        #[arg(short = 'H', long, default_value = "all")]
+        harness: String,
+        /// Install or generate git lifecycle hook scripts (e.g. .git/hooks/pre-push)
+        #[arg(long)]
+        hooks: bool,
+        /// Overwrite existing files
+        #[arg(short, long)]
+        force: bool,
+        /// Print generated skill markdown directly to stdout
+        #[arg(long)]
+        stdout: bool,
+    },
 }
 
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let quiet_stdout = matches!(&cli.command, Some(Commands::Export { output: None, .. }));
+    let quiet_stdout = matches!(&cli.command, Some(Commands::Export { output: None, .. }))
+        || matches!(&cli.command, Some(Commands::InitSkill { stdout: true, .. }));
     if !quiet_stdout {
         banner::print_banner();
     }
@@ -506,6 +526,15 @@ pub fn run() -> anyhow::Result<()> {
                 }
             }
         }
+        Some(Commands::InitSkill {
+            target,
+            harness,
+            hooks,
+            force,
+            stdout,
+        }) => {
+            handle_init_skill(target.as_deref(), harness, *hooks, *force, *stdout)?;
+        }
         None => {
             println!(
                 "Run '{}' or '{}' to begin.",
@@ -514,6 +543,154 @@ pub fn run() -> anyhow::Result<()> {
             );
         }
     }
+
+    Ok(())
+}
+
+pub const SKILL_TEMPLATE: &str = include_str!("../../../skills/agent-ooo/SKILL.md");
+
+pub fn handle_init_skill(
+    target: Option<&str>,
+    harness: &str,
+    hooks: bool,
+    force: bool,
+    stdout: bool,
+) -> anyhow::Result<()> {
+    let current_dir = env::current_dir()?;
+    handle_init_skill_with_base(target, harness, hooks, force, stdout, &current_dir)
+}
+
+pub fn handle_init_skill_with_base(
+    target: Option<&str>,
+    harness: &str,
+    hooks: bool,
+    force: bool,
+    stdout: bool,
+    base_dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    if stdout {
+        print!("{}", SKILL_TEMPLATE);
+        return Ok(());
+    }
+
+    println!(
+        "{} Initializing Agent OOO skill bundle...",
+        "[SKILL]".bold().cyan()
+    );
+
+    let raw_target = target.unwrap_or("./skills/agent-ooo");
+    let target_dir = if std::path::Path::new(raw_target).is_absolute() {
+        std::path::PathBuf::from(raw_target)
+    } else {
+        base_dir.join(raw_target)
+    };
+    std::fs::create_dir_all(&target_dir)?;
+
+    let skill_path = target_dir.join("SKILL.md");
+    if skill_path.exists() && !force {
+        anyhow::bail!(
+            "Skill file already exists at {}. Pass --force to overwrite.",
+            skill_path.display()
+        );
+    }
+    std::fs::write(&skill_path, SKILL_TEMPLATE)?;
+
+    println!(
+        "  {} Skill template written to: {}",
+        "✓".green(),
+        skill_path.display().to_string().bold()
+    );
+
+    let lower_harness = harness.to_ascii_lowercase();
+    match lower_harness.as_str() {
+        "antigravity" => {
+            println!(
+                "  * Antigravity: Discovered at {} or ~/.gemini/antigravity/skills/agent-ooo",
+                skill_path.display()
+            );
+        }
+        "claude" => {
+            println!(
+                "  * Claude Code: Reference via /skill or include in CLAUDE.md / .claude/skills/"
+            );
+        }
+        "cursor" => {
+            println!("  * Cursor: Include in .cursor/rules/agent-ooo.mdc or project prompts");
+        }
+        "codex" => {
+            println!("  * OpenAI Codex: Reference in CODEX.md or project system prompt");
+        }
+        "git" => {
+            println!("  * Git: Canary gate configured for .git/hooks/pre-push");
+        }
+        _ => {
+            println!("  * Ready for Antigravity, Claude Code, Cursor, Codex CLI, and Git lifecycle hooks.");
+        }
+    }
+
+    let should_install_hooks = hooks || lower_harness == "git";
+    if should_install_hooks {
+        let git_dir = base_dir.join(".git");
+        if git_dir.exists() {
+            let hooks_dir = git_dir.join("hooks");
+            std::fs::create_dir_all(&hooks_dir)?;
+            let pre_push_path = hooks_dir.join("pre-push");
+
+            if pre_push_path.exists() && !force {
+                anyhow::bail!(
+                    "Git pre-push hook already exists at {}. Pass --force to overwrite.",
+                    pre_push_path.display()
+                );
+            }
+
+            let hook_script = r#"#!/usr/bin/env bash
+# Agent OOO Git Pre-Push Canary Hook
+# Verifies checkpoint integrity, unresolved tool failures, and unverified late edits.
+
+set -euo pipefail
+
+if command -v ooo >/dev/null 2>&1; then
+    echo "[agent-ooo] Running discharge canary gate prior to push..."
+    ooo discharge
+elif command -v agent-ooo >/dev/null 2>&1; then
+    echo "[agent-ooo] Running discharge canary gate prior to push..."
+    agent-ooo discharge
+else
+    exit 0
+fi
+"#;
+            std::fs::write(&pre_push_path, hook_script)?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(metadata) = std::fs::metadata(&pre_push_path) {
+                    let mut perms = metadata.permissions();
+                    perms.set_mode(0o755);
+                    let _ = std::fs::set_permissions(&pre_push_path, perms);
+                }
+            }
+
+            println!(
+                "  {} Git pre-push hook installed to: {}",
+                "✓".green(),
+                pre_push_path.display().to_string().bold()
+            );
+        } else {
+            println!(
+                "  {} No .git directory found at {}; skipped git lifecycle hook.",
+                "!".yellow(),
+                base_dir.display()
+            );
+        }
+    }
+
+    println!(
+        "\n{} Verify installation with: '{}' or '{}'",
+        "★".yellow(),
+        "ooo checkin".bold(),
+        "ooo discharge".bold()
+    );
 
     Ok(())
 }
@@ -552,6 +729,116 @@ mod tests {
                 assert_eq!(transcript, Some("custom.jsonl".to_string()));
             }
             _ => panic!("Expected Commands::Detox"),
+        }
+    }
+
+    #[test]
+    fn test_init_skill_parsing_and_execution() {
+        let args = [
+            "agent-ooo",
+            "init-skill",
+            "--target",
+            "custom-skill",
+            "-H",
+            "claude",
+            "--force",
+        ];
+        let cli = Cli::try_parse_from(args).expect("parse init-skill");
+        match cli.command {
+            Some(Commands::InitSkill {
+                target,
+                harness,
+                hooks,
+                force,
+                stdout,
+            }) => {
+                assert_eq!(target, Some("custom-skill".to_string()));
+                assert_eq!(harness, "claude");
+                assert!(!hooks);
+                assert!(force);
+                assert!(!stdout);
+            }
+            _ => panic!("Expected Commands::InitSkill"),
+        }
+
+        // Test alias init-hooks
+        let args_alias = ["ooo", "init-hooks", "--hooks"];
+        let cli_alias = Cli::try_parse_from(args_alias).expect("parse init-hooks alias");
+        match cli_alias.command {
+            Some(Commands::InitSkill { hooks, .. }) => {
+                assert!(hooks);
+            }
+            _ => panic!("Expected Commands::InitSkill via alias"),
+        }
+
+        // Test execution with temp directory
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target_str = temp_dir.path().join("skills/agent-ooo");
+        let target_path_str = target_str.to_string_lossy().to_string();
+
+        // 1. Initial generation
+        handle_init_skill_with_base(
+            Some(&target_path_str),
+            "antigravity",
+            false,
+            false,
+            false,
+            temp_dir.path(),
+        )
+        .expect("write skill to temp dir");
+
+        let generated_skill = target_str.join("SKILL.md");
+        assert!(generated_skill.exists());
+        let content = std::fs::read_to_string(&generated_skill).unwrap();
+        assert!(content.contains("name: agent-ooo"));
+        assert!(content.contains("## 1. Operational triggers and treatment menu"));
+
+        // 2. Overwrite without force fails
+        let err = handle_init_skill_with_base(
+            Some(&target_path_str),
+            "antigravity",
+            false,
+            false,
+            false,
+            temp_dir.path(),
+        );
+        assert!(err.is_err());
+
+        // 3. Overwrite with force succeeds
+        handle_init_skill_with_base(
+            Some(&target_path_str),
+            "antigravity",
+            false,
+            true,
+            false,
+            temp_dir.path(),
+        )
+        .expect("overwrite with force");
+
+        // 4. Test git hook generation when .git is present
+        let git_dir = temp_dir.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+
+        handle_init_skill_with_base(
+            Some(&target_path_str),
+            "all",
+            true,
+            true,
+            false,
+            temp_dir.path(),
+        )
+        .expect("write hooks");
+
+        let pre_push = git_dir.join("hooks").join("pre-push");
+        assert!(pre_push.exists());
+        let hook_content = std::fs::read_to_string(&pre_push).unwrap();
+        assert!(hook_content.contains("ooo discharge"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(&pre_push).unwrap().permissions();
+            assert_ne!(perms.mode() & 0o111, 0, "hook must be executable");
         }
     }
 }

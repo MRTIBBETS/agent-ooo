@@ -2,22 +2,31 @@ use crate::checkin::parser::TranscriptMetrics;
 use crate::checkin::{AgentVitals, ToolUsageStat, TriageReceipt, WellnessTier};
 use std::path::Path;
 
-fn estimate_api_cost_usd(
+pub(crate) fn estimate_api_cost_usd(
     model_id: &str,
     input_tokens: u64,
     cache_read_tokens: u64,
     output_tokens: u64,
 ) -> f64 {
     let lower = model_id.to_ascii_lowercase();
-    // Per-1M token reference rates (USD): (uncached_input, cache_read, output)
-    let (in_rate, cache_rate, out_rate) = if lower.contains("flash") || lower.contains("lite") {
+    // Per-1M token reference rates in USD: (uncached_input, cache_read, output)
+    let (in_rate, cache_rate, out_rate) = if lower.contains("flash")
+        || lower.contains("lite")
+        || lower.contains("haiku")
+        || lower.contains("4o-mini")
+        || lower.contains("o1-mini")
+        || lower.contains("o3-mini")
+    {
         (0.30, 0.03, 2.50)
-    } else if lower.contains("opus") {
+    } else if lower.contains("opus") || (lower.contains("o1") && !lower.contains("mini")) {
         (15.00, 1.50, 75.00)
-    } else if lower.contains("sonnet") || lower.contains("argon") {
+    } else if lower.contains("sonnet")
+        || lower.contains("argon")
+        || (lower.contains("gpt-4o") && !lower.contains("mini"))
+    {
         (3.00, 0.30, 15.00)
     } else {
-        // High-reasoning tier default (Carbon / Pro)
+        // High-reasoning tier default (Carbon or Pro)
         (2.50, 0.25, 15.00)
     };
 
@@ -169,5 +178,58 @@ pub fn calculate_triage(transcript_path: &Path, metrics: TranscriptMetrics) -> T
         degradation_score,
         condition,
         vitals,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_estimate_api_cost_usd_tiers() {
+        // 1. Flash / Lite / Haiku / Mini models: (0.30, 0.03, 2.50)
+        // 1M uncached in ($0.30) + 1M cached in ($0.03) + 1M out ($2.50) = $2.83
+        let cost_flash = estimate_api_cost_usd("gemini-2.5-flash", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_flash - 2.83).abs() < 1e-4);
+
+        let cost_haiku = estimate_api_cost_usd("claude-3-haiku", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_haiku - 2.83).abs() < 1e-4);
+
+        let cost_4o_mini = estimate_api_cost_usd("gpt-4o-mini", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_4o_mini - 2.83).abs() < 1e-4);
+
+        let cost_o1_mini = estimate_api_cost_usd("o1-mini", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_o1_mini - 2.83).abs() < 1e-4);
+
+        let cost_o3_mini = estimate_api_cost_usd("o3-mini", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_o3_mini - 2.83).abs() < 1e-4);
+
+        // 2. Opus / o1 (excluding mini): (15.00, 1.50, 75.00)
+        // 1M uncached ($15.00) + 1M cached ($1.50) + 1M out ($75.00) = $91.50
+        let cost_opus = estimate_api_cost_usd("claude-3-opus", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_opus - 91.50).abs() < 1e-4);
+
+        let cost_o1 = estimate_api_cost_usd("o1-preview", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_o1 - 91.50).abs() < 1e-4);
+
+        // 3. Sonnet / Argon / gpt-4o (excluding mini): (3.00, 0.30, 15.00)
+        // 1M uncached ($3.00) + 1M cached ($0.30) + 1M out ($15.00) = $18.30
+        let cost_sonnet =
+            estimate_api_cost_usd("claude-3-5-sonnet", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_sonnet - 18.30).abs() < 1e-4);
+
+        let cost_argon = estimate_api_cost_usd("Gemini 4 Argon", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_argon - 18.30).abs() < 1e-4);
+
+        let cost_gpt4o = estimate_api_cost_usd("gpt-4o", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_gpt4o - 18.30).abs() < 1e-4);
+
+        // 4. Default / Pro / Carbon: (2.50, 0.25, 15.00)
+        // 1M uncached ($2.50) + 1M cached ($0.25) + 1M out ($15.00) = $17.75
+        let cost_pro = estimate_api_cost_usd("gemini-2.5-pro", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_pro - 17.75).abs() < 1e-4);
+
+        let cost_default = estimate_api_cost_usd("unspecified", 1_000_000, 1_000_000, 1_000_000);
+        assert!((cost_default - 17.75).abs() < 1e-4);
     }
 }

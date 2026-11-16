@@ -65,6 +65,99 @@ fn extract_antigravity_model_setting(text: &str) -> Option<String> {
     }
 }
 
+fn is_valid_model_name(s: &str) -> bool {
+    s.len() >= 2
+        && s.chars().any(|c| c.is_ascii_alphabetic())
+        && !s.chars().all(|c| !c.is_ascii_alphanumeric())
+        && !s.eq_ignore_ascii_case("inherit")
+        && !s.eq_ignore_ascii_case("none")
+        && !s.eq_ignore_ascii_case("unknown")
+}
+
+pub(crate) fn extract_model_from_markers(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+
+    // 1. Look for Model: "..." or Model: '...' or Model: `...` or unquoted Model: flash
+    if let Some(pos) = lower.find("model:") {
+        let rest = &text[pos + 6..].trim_start();
+        if let Some(first) = rest.chars().next() {
+            if first == '"' || first == '\'' || first == '`' {
+                let quote = first;
+                let after_quote = &rest[quote.len_utf8()..];
+                if let Some(end_quote) = after_quote.find(quote) {
+                    let candidate = after_quote[..end_quote].trim();
+                    if is_valid_model_name(candidate) {
+                        return Some(candidate.to_string());
+                    }
+                }
+            } else {
+                let end = rest
+                    .find(|c: char| {
+                        c.is_whitespace() || c == ',' || c == '\n' || c == '}' || c == ')'
+                    })
+                    .unwrap_or(rest.len());
+                let candidate = rest[..end].trim().trim_matches(['"', '\'', '`']);
+                if is_valid_model_name(candidate) {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+    }
+
+    // 2. Look for Tier-X (`model`) or Tier-X (model) with tight proximity (within 15 chars)
+    if let Some(pos) = lower.find("tier-") {
+        let rest = &text[pos..];
+        if let Some(open) = rest.find('(') {
+            if open <= 15 {
+                let after_open = &rest[open + 1..];
+                if let Some(close) = after_open.find(')') {
+                    if close <= 32 {
+                        let candidate = after_open[..close].trim().trim_matches(['`', '"', '\'']);
+                        if is_valid_model_name(candidate) {
+                            return Some(candidate.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Known model slugs
+    let known_slugs = [
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "claude-3-7-sonnet",
+        "claude-3-5-sonnet",
+        "claude-3-opus",
+        "claude-3-haiku",
+        "gpt-4o-mini",
+        "gpt-4o",
+        "o1-mini",
+        "o3-mini",
+        "o1",
+    ];
+    for slug in known_slugs {
+        if *slug == *"o1" {
+            if let Some(idx) = lower.find("o1") {
+                let before_ok = idx == 0 || !lower.as_bytes()[idx - 1].is_ascii_alphanumeric();
+                let after_idx = idx + 2;
+                let after_ok = after_idx >= lower.len()
+                    || !lower.as_bytes()[after_idx].is_ascii_alphanumeric();
+                if before_ok && after_ok {
+                    return Some("o1".to_string());
+                }
+            }
+        } else if lower.contains(slug) {
+            return Some((*slug).to_string());
+        }
+    }
+
+    None
+}
+
 fn record_tool_call(metrics: &mut TranscriptMetrics, tool_name: &str, args_str: &str) {
     metrics.total_tool_calls_count += 1;
     if metrics.tool_calls.len() < MAX_STORED_TOOL_CALLS {
@@ -211,18 +304,54 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
             let is_assistant_role =
                 matches!(role.as_str(), "MODEL" | "ASSISTANT" | "PLANNER_RESPONSE");
 
-            if let Some(model_str) = message
+            let model_candidate = message
                 .and_then(|m| m.get("model"))
                 .or_else(|| value.get("model"))
+                .or_else(|| value.get("model_id"))
+                .or_else(|| value.get("model_name"))
+                .or_else(|| message.and_then(|m| m.get("model_id")))
+                .or_else(|| message.and_then(|m| m.get("model_name")))
                 .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-            {
+                .filter(|s| !s.is_empty());
+
+            if let Some(model_str) = model_candidate {
                 metrics.model_id = Some(model_str.to_string());
             } else if is_user_role {
                 if let Some(content_str) = value.get("content").and_then(|v| v.as_str()) {
                     if content_str.contains("<USER_SETTINGS_CHANGE>") {
                         if let Some(selected) = extract_antigravity_model_setting(content_str) {
                             metrics.model_id = Some(selected);
+                        }
+                    } else if metrics.model_id.is_none() {
+                        if let Some(marker_model) = extract_model_from_markers(content_str) {
+                            metrics.model_id = Some(marker_model);
+                        }
+                    }
+                }
+            }
+
+            // Fallback: Check non-tool turns for model markers if still undetected
+            if metrics.model_id.is_none() && !is_antigravity_tool_result {
+                let content_candidate =
+                    value.get("content").and_then(|v| v.as_str()).or_else(|| {
+                        message
+                            .and_then(|m| m.get("content"))
+                            .and_then(|c| c.as_str())
+                    });
+                if let Some(text) = content_candidate {
+                    if let Some(marker_model) = extract_model_from_markers(text) {
+                        metrics.model_id = Some(marker_model);
+                    }
+                } else if let Some(blocks) = message
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                {
+                    for block in blocks {
+                        if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                            if let Some(m) = extract_model_from_markers(t) {
+                                metrics.model_id = Some(m);
+                                break;
+                            }
                         }
                     }
                 }
@@ -488,5 +617,73 @@ mod tests {
         let receipt = crate::checkin::triage::calculate_triage(file.path(), metrics);
         assert!(!receipt.loop_lock_detected);
         assert_eq!(receipt.repetition_count, 1);
+    }
+
+    #[test]
+    fn test_extract_model_from_markers_and_subagent_transcripts() {
+        assert_eq!(
+            extract_model_from_markers(r#"Model: "flash""#),
+            Some("flash".to_string())
+        );
+        assert_eq!(
+            extract_model_from_markers(r#"Model: 'flash_lite'"#),
+            Some("flash_lite".to_string())
+        );
+        assert_eq!(
+            extract_model_from_markers(r#"Model: "pro""#),
+            Some("pro".to_string())
+        );
+        assert_eq!(
+            extract_model_from_markers("You are the Tier-2 (`flash`) Implementation Author"),
+            Some("flash".to_string())
+        );
+        assert_eq!(
+            extract_model_from_markers("Running with gemini-2.5-flash model"),
+            Some("gemini-2.5-flash".to_string())
+        );
+
+        // Subagent transcript with marker in system prompt turn
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"{{"source":"SYSTEM","type":"USER_INPUT","content":"You are the Tier-2 (`flash`) Implementation Author for Cycle 2."}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"source":"MODEL","type":"PLANNER_RESPONSE","content":"Understood, beginning task."}}"#
+        )
+        .unwrap();
+
+        let metrics = parse_transcript(file.path()).unwrap();
+        assert_eq!(metrics.model_id.as_deref(), Some("flash"));
+
+        // Transcript with explicit model_id key
+        let mut file2 = NamedTempFile::new().unwrap();
+        writeln!(
+            file2,
+            r#"{{"source":"MODEL","model_id":"claude-3-5-sonnet","content":"Here is the response."}}"#
+        )
+        .unwrap();
+        let metrics2 = parse_transcript(file2.path()).unwrap();
+        assert_eq!(metrics2.model_id.as_deref(), Some("claude-3-5-sonnet"));
+
+        // Tool result turns containing code diffs or punctuation must not set model_id
+        let mut file3 = NamedTempFile::new().unwrap();
+        writeln!(
+            file3,
+            r#"{{"source":"SYSTEM","type":"SYSTEM_MESSAGE","content":"You are Tier-2 (`flash`) worker"}}"#
+        )
+        .unwrap();
+        writeln!(
+            file3,
+            r#"{{"source":"MODEL","type":"GENERIC","status":"DONE","content":"diff --git a/file.rs\n- tier- code ('-')"}}"#
+        )
+        .unwrap();
+        let metrics3 = parse_transcript(file3.path()).unwrap();
+        assert_eq!(metrics3.model_id.as_deref(), Some("flash"));
+
+        assert_eq!(extract_model_from_markers("-"), None);
+        assert_eq!(extract_model_from_markers("tier-2"), None);
     }
 }

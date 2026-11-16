@@ -17,6 +17,7 @@ dependencies = [
  "clap",
  "colored",
  "self_update",
+ "tempfile",
 ]
 
 [[package]]

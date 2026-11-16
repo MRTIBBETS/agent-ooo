@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- **Cycle 2 (`A2`): Turnkey Agent Skill Bundle & Pre-Push Lifecycle Hook (`ooo init-skill` / `ooo init-hooks`):**
+  - Added turnkey agent skill bundle `skills/agent-ooo/SKILL.md` specifying operational triggers (`checkin`, `detox`, `spa`, `discharge`, `export`), harness setup guides (Antigravity, Claude Code, Cursor, OpenAI Codex CLI, and Git lifecycle hooks), and zero em dash compliance.
+  - Implemented `ooo init-skill` CLI command (with alias `ooo init-hooks`) in `crates/cli/src/lib.rs` supporting `-t` / `--target`, `-H` / `--harness`, `--hooks`, `-f` / `--force`, and `--stdout` flags. Automatically embeds the skill template, generates `.git/hooks/pre-push` with a fast `ooo discharge` canary gate, and marks hook scripts executable on Unix.
+  - Enhanced model extraction in `crates/core/src/checkin/parser.rs` to detect models across `value.get("model")`, `model_id`, `model_name`, `message.get("model")`, and content markers (`Model: "flash"`, `Model: "flash_lite"`, `Model: "pro"`, `Tier-2 (`flash`)`, `gemini-2.5-flash`).
+  - Refined `estimate_api_cost_usd` in `crates/core/src/checkin/triage.rs` to handle tiered token pricing across flash/lite/haiku/mini (`$0.30` / `$0.03` / `$2.50`), opus/o1 (`$15.00` / `$1.50` / `$75.00`), sonnet/argon/gpt-4o (`$3.00` / `$0.30` / `$15.00`), and default pro/carbon (`$2.50` / `$0.25` / `$15.00`).
+  - Added unit tests for `InitSkill` argument parsing, file generation, `--force` overwrites, git hook permissions, subagent transcript model detection, and pricing tiers (`45` total workspace tests).
+  - *Self-Review Fix 1:* Replaced dynamic executable alias inside the git pre-push template with concrete `ooo discharge` and `agent-ooo discharge` invocations so the generated script strictly adheres to the published skill documentation and passes content assertion tests.
+  - *Self-Review Fix 2:* Guarded subagent model marker extraction in `crates/core/src/checkin/parser.rs` with `is_valid_model_name` and `!is_antigravity_tool_result` to prevent code diffs and punctuation in tool result turns from corrupting transcript model identification.
+  - *Context:* Authored by Antigravity Tier-2 Subagent (Gemini 3.8 Flash) and reviewed by Coordinator (Gemini 4 Carbon) using Rust 1.99.1 and Cap'n Proto 1.5.0.
 - **Cycle 1 (`A1`): Machine-Wide Secret Posture (`ooo detox --all`) & 7-Harness Auto-Discovery:**
   - Added bounded recursive session discovery (`scan_jsonl_tree`, depth-limited and entry-capped) in `crates/core/src/checkin/discovery.rs` to auto-discover **Codex CLI** (`~/.codex/sessions`), **Windsurf** (`~/.codeium/windsurf`, `~/.windsurf/sessions`), and **Cline / Roo Code** (`~/.cline`, `~/.roo-code`) alongside Antigravity, Antigravity IDE, Claude Code, and Cursor (`7` harnesses total).
   - Added `-a` / `--all` to `ooo detox` in `crates/cli/src/lib.rs` (bringing 1:1 CLI parity with MCP `all_sessions: true`) to stream-scan every discovered session across all local harnesses and print a masked credential posture summary.

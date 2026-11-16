@@ -9,8 +9,10 @@ All items are ranked by **user value x distribution leverage / complexity**. Aut
 - [x] **A1. Machine-Wide CLI Secret Audit (`ooo detox --all`) & Multi-Harness Discovery (`Cycle 1`):**
   - Bring MCP's `all_sessions: true` machine-wide secret scan to the CLI (`ooo detox --all`) with a crisp summary table across every session on disk.
   - Expand `checkin::discovery` to auto-discover **OpenAI Codex CLI** (`~/.codex/sessions`), **Windsurf** (`~/.codeium/windsurf`), and **Cline / Roo Code** transcripts with unit tests.
-- [ ] **A2. Turnkey Agent Skill & Lifecycle Hook Bundle (`Cycle 2`):**
-  - Author `skills/agent-ooo/SKILL.md` and `ooo init-hooks` (or documented Claude Code / Antigravity hook recipes) so agents know *when* to call `checkin`, `detox`, `spa`, `discharge`, and `export` automatically before PRs and handoffs.
+- [x] **A2. Turnkey Agent Skill & Lifecycle Hook Bundle (`Cycle 2`):**
+  - Author `skills/agent-ooo/SKILL.md` and `ooo init-skill` (with alias `ooo init-hooks`) so agents know *when* to call `checkin`, `detox`, `spa`, `discharge`, and `export` automatically before PRs and handoffs.
+  - Subagent model auto-detection across non-standard logs and tiered API cost estimation (`$0.30` flash/lite/mini, `$15.00` opus/o1, `$3.00` sonnet/argon/gpt-4o, `$2.50` carbon/pro).
+  - Pre-push git lifecycle hook installation (`.git/hooks/pre-push`) with fast `ooo discharge` clinical and behavioral canary gate.
 - [ ] **A3. Fast-Path Byte Pre-Filter & Benchmark Harness (`Cycle 3`):**
   - Add fast byte-slice pre-checks in `sanitizer.rs` to skip regex matching on clean ASCII lines without `\x1b` or secret prefixes, plus a deterministic `cargo test --release` throughput benchmark fixture in `crates/core/tests/`.
 - [ ] **A4. Shareable Terminal Vitals Card (`ooo checkin --card`) (`Cycle 4`):**

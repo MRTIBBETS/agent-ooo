@@ -1,32 +1,33 @@
 # Agent OOO Operational Status
 
-**Last updated:** 2026-11-15
-**Latest release:** `v0.2.0` (with Cycle 0 Vision Alignment + Cycle 1 Multi-Harness & Detox `--all` on `main`)
-**Active sprint:** `v0.3.0` Wedge & Distribution (Next up: Cycle 2 `A2` Turnkey Agent Skill & Lifecycle Hook Bundle)
-**Overall health:** Green (`42/42` tests passing, `0` clippy warnings, `47.0 ms` full spa latency, `12.48 MB` peak RSS)
+**Last updated:** 2026-11-16
+**Latest release:** `v0.2.0` (with Cycle 0 Vision Alignment, Cycle 1 Multi-Harness & Detox `--all`, and Cycle 2 Turnkey Skill & Lifecycle Hooks on `main`)
+**Active sprint:** `v0.3.0` Wedge & Distribution (Next up: Cycle 3 `A3` Fast-Path Byte Pre-Filter & Benchmark Harness)
+**Overall health:** Green (`45/45` tests passing, `0` clippy warnings, `28.72 ms` full spa latency, `12.25 MB` peak RSS)
 
 ## 1. Executive pulse
 
-* **What just shipped (`Cycle 1` / Roadmap `A1`):**
-  * **Machine-wide CLI secret posture (`ooo detox --all` / `-a`):** Operators can now audit every discovered AI coding session on their machine from the terminal in `<50 ms`, matching the MCP `detox(scan_all: true)` tool without panicking on unreadable session files (`skipped_sessions` fault isolation). Live run scanned `25` local sessions and surfaced `102` secret occurrences across `5` transcripts with masked values.
-  * **7-harness auto-discovery:** Expanded bounded directory tree scanning (`scan_jsonl_tree` with `MAX_TREE_CANDIDATES = 512` and `.git`/`node_modules`/`target` guards) in `crates/core/src/checkin/discovery.rs` to automatically discover **OpenAI Codex CLI** (`~/.codex/sessions`), **Windsurf** (`~/.codeium/windsurf`, `~/.windsurf/sessions`), and **Cline / Roo Code** (`~/.cline`, `~/.roo-code`) alongside Antigravity, AGY IDE, Claude Code, and Cursor.
-  * **Tiered subagent execution verified:** Authoring + unit tests (`114` turns, `55` tool calls) ran end-to-end on `Gemini 3.8 Flash` for **`$0.25`** (`230.7k` in / `3.49M` cache / `30.7k` out), nearly **8x cheaper** than running implementation directly on Carbon.
-* **Next queued slice (`Cycle 2` / Roadmap `A2`):**
-  * **Turnkey Agent Skill & Lifecycle Hook Bundle (`ooo init-skill`):** Generate ready-to-use `SKILL.md` + hook instructions for Claude Code, Cursor, Antigravity, and Codex so agents automatically invoke `checkin` -> `spa` when `rot_index >= 5.0` without manual prompting.
+* **What just shipped (`Cycle 2` / Roadmap `A2`):**
+  * **Turnkey Agent Skill Bundle (`skills/agent-ooo/SKILL.md`):** Published complete operational skill specification detailing when agents must trigger `checkin` (context rot, cognitive loops, API spend), `detox` (secret hygiene, ANSI stripping, 512 KB CAS spillover, machine-wide posture scans), `spa` (full 4-step reset when Rot Index >= 5.0 or 3x error loop lock), `discharge` (clinical & behavioral canary exit exam before commit or push, bounded CAS payload recall), and `export` (secret-scrubbed JSONL, normalized, or loop-severed handoff markdown).
+  * **CLI Skill & Lifecycle Hook Generator (`ooo init-skill` / `ooo init-hooks`):** Added display order 8 CLI command with `-t` / `--target`, `-H` / `--harness`, `--hooks`, `-f` / `--force`, and `--stdout` flags. Automatically embeds the skill template, writes `.git/hooks/pre-push` with executable permissions on Unix, and wires the fast `ooo discharge` canary gate so broken code or unverified late edits cannot be pushed to remotes.
+  * **Subagent Model Auto-Detection & 4-Tier Token Pricing:** Hardened transcript parser to auto-detect subagent models from `model`/`model_id`/`model_name` keys and prompt markers (`Model: "flash"`, `Model: "pro"`, `Tier-2 (`flash`)`). Enhanced `estimate_api_cost_usd` with accurate reference rates across flash/lite/haiku/mini (`$0.30` in / `$0.03` cache_read / `$2.50` out), opus/o1 (`$15.00` / `$1.50` / `$75.00`), sonnet/argon/gpt-4o (`$3.00` / `$0.30` / `$15.00`), and carbon/pro (`$2.50` / `$0.25` / `$15.00`).
+  * **Fresh Scheduled Autonomous Execution Under Budget:** Cycle 2 ran in a fresh unattended session. Total sprint cost was **`$0.64`** (`$0.40` Flash Author across 154 turns + `$0.24` Carbon Review across 126 turns), well below the `< $1.00` hard guardrail.
+* **Next queued slice (`Cycle 3` / Roadmap `A3`):**
+  * **Fast-Path Byte Pre-Filter & Benchmark Harness:** Add fast byte-slice pre-checks in `sanitizer.rs` to skip regex matching on clean ASCII lines without `\x1b` or secret prefixes, plus a deterministic `cargo test --release` throughput benchmark fixture in `crates/core/tests/`.
 * **Schedule & founder action item:**
-  * Recurring schedule is configured in `agent-ooo-autonomous-sprint` (`Mon / Wed / Fri at 9:00 AM PT`; next window: **Monday, Nov 16, 2026 at 9:00 AM PT**). Toggle **Agent OOO Autonomous Sprint** ON in the Automations dashboard to activate unattended background execution (fresh-context runs also eliminate multi-week coordinator cache overhead).
+  * Recurring schedule is configured in `agent-ooo-autonomous-sprint` (`Mon / Wed / Fri at 9:00 AM PT`; next window: **Wednesday, Nov 18, 2026 at 9:00 AM PT**).
 
 ## 2. Core KPIs, growth & credit ledger
 
-| Category | Metric | Previous (`Cycle 0`) | Current (`Cycle 1`, 2026-11-15) | Target (`v0.3.0`) |
+| Category | Metric | Previous (`Cycle 1`) | Current (`Cycle 2`, 2026-11-16) | Target (`v0.3.0`) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Product Quality** | Workspace unit + integration tests | `38` passing | `42` passing (`0` failing) | `50+` passing |
-| **Engine Speed** | `ooo spa` release latency (2.1 MB / 688-turn log) | `47.01 ms` | `47.01 ms` (`< 50 ms` across 25 sessions on `detox --all`) | `< 50 ms` |
-| **Memory Bound** | Peak RSS (`maximum resident set size`) | `13.86 MB` | `12.48 MB` (`7.21 MB` peak footprint) | `< 24 MB` |
-| **Coverage** | Supported agent harnesses | `4` | `7` (Antigravity, AGY IDE, Claude Code, Cursor, Codex CLI, Windsurf, Cline) | `7+` (Target met) |
+| **Product Quality** | Workspace unit + integration tests | `42` passing | `45` passing (`0` failing) | `50+` passing |
+| **Engine Speed** | `ooo spa` release latency (2.1 MB / 688-turn log) | `47.01 ms` | `28.72 ms` (sub-30ms full retreat) | `< 50 ms` |
+| **Memory Bound** | Peak RSS (`maximum resident set size`) | `12.48 MB` | `12.25 MB` (`6.59 MB` peak footprint) | `< 24 MB` |
+| **Coverage** | Supported agent harnesses | `7` | `7` + Turnkey Skill Bundle & Git Pre-Push Hook | `7+` (Target met) |
 | **Distribution** | GitHub release downloads (cumulative across tags) | `20` (`4` on `v0.2.0`) | `20` (`4` on `v0.2.0`) | `100+` |
 | **Distribution** | GitHub stars / forks / open issues | `1` / `0` / `0` | `1` / `0` / `0` | Track weekly delta |
-| **Ops Credit Spend** | Cycle 1 token & spend breakdown | `$20.12` (multi-week cumulative) | `$0.25` Flash Author (`230.7k` in / `30.7k` out) + `$2.40` Carbon Review (731-turn thread delta) | `< $1.00` / fresh autonomous run |
+| **Ops Credit Spend** | Fresh autonomous cycle token & spend ledger | `$2.65` (historical coordinator delta) | `$0.40` Flash Author (`236.4k` in / `53.8k` out) + `$0.24` Carbon Review (`195.2k` in / `28.5k` out) = **`$0.64`** | `< $1.00` / fresh autonomous run |
 
 ## 3. Model routing & cost governance charter
 
