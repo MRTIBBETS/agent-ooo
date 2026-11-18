@@ -13,7 +13,7 @@ All items are ranked by **user value x distribution leverage / complexity**. Aut
   - Author `skills/agent-ooo/SKILL.md` and `ooo init-skill` (with alias `ooo init-hooks`) so agents know *when* to call `checkin`, `detox`, `spa`, `discharge`, and `export` automatically before PRs and handoffs.
   - Subagent model auto-detection across non-standard logs and tiered API cost estimation (`$0.30` flash/lite/mini, `$15.00` opus/o1, `$3.00` sonnet/argon/gpt-4o, `$2.50` carbon/pro).
   - Pre-push git lifecycle hook installation (`.git/hooks/pre-push`) with fast `ooo discharge` clinical and behavioral canary gate.
-- [ ] **A3. Fast-Path Byte Pre-Filter & Benchmark Harness (`Cycle 3`):**
+- [x] **A3. Fast-Path Byte Pre-Filter & Benchmark Harness (`Cycle 3`):**
   - Add fast byte-slice pre-checks in `sanitizer.rs` to skip regex matching on clean ASCII lines without `\x1b` or secret prefixes, plus a deterministic `cargo test --release` throughput benchmark fixture in `crates/core/tests/`.
 - [ ] **A4. Shareable Terminal Vitals Card (`ooo checkin --card`) (`Cycle 4`):**
   - Render a compact, screenshot-ready ANSI terminal card summarizing Guest Condition, Rot Index, Harness + Model, Top Tools, API Token Spend, and Secrets Masked.

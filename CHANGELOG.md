@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- **Cycle 3 (`A3`): Fast-Path Byte Pre-Filter & Benchmark Harness (`crates/core/src/detox/sanitizer.rs`):**
+  - Added `has_ansi_candidate` (`bytes.contains(&0x1B)`), `has_secret_candidate` (20-byte minimum length check and single-pass prefix byte scan for `sk-`, `AIza`, `AQ.`, `AKIA`, `gh[pousr]_`, `github_pat_`, `eyJ`, case-insensitive `bearer`, and `-----BEGIN `), and `contains_json_unicode_escape` (`\\u` window check) in `crates/core/src/detox/sanitizer.rs`.
+  - Updated `sanitize_content` to skip both `SECRET_RE` and `ANSI_RE` on clean strings and selectively invoke only the matching regex using `Cow::Borrowed`, and guarded `scan_str_into` with `has_secret_candidate`.
+  - Refactored `scan_transcript_secrets` to stream with a single reusable `String` buffer via `reader.read_line(&mut line)?` while preserving 1-based physical line numbers and skipping `serde_json::from_str::<Value>` DOM parsing and regex execution on lines lacking both secret candidates and `\u` JSON escapes.
+  - Added `crates/core/tests/sanitizer_throughput.rs` with equivalence tests (empty/short inputs, near-misses, all secret families, ANSI CSI/OSC sequences, `\u0073` JSON-escaped secrets) and a deterministic ~3.70 MB clean / ~1.98 MB mixed throughput benchmark (`542.24 MB/s` clean scan, `946.94 MB/s` clean sanitize, `612.21 MB/s` mixed scan, `233.42 MB/s` mixed sanitize in release mode).
+  - Updated `README.md` and `llms.txt` to document the fast-path byte-slice pre-filter.
+  - *Self-Review Fix 1:* Replaced JSON-escaped `\u001b` in the mixed `sanitize_content` benchmark slice with raw `0x1B` bytes and expanded the 10,000-turn clean fixture to ~3.70 MB so the benchmark genuinely exercises ANSI stripping and multi-megabyte fast-path throughput.
+  - *Self-Review Fix 2:* Added concise docstrings (`///`) and `#[inline]` attributes to `has_ansi_candidate`, `has_secret_candidate`, and `contains_json_unicode_escape` in `crates/core/src/detox/sanitizer.rs` during coordinator review.
+  - *Context:* Authored by Antigravity Tier-2 Subagent (Gemini 3.8 Flash) and reviewed by Coordinator using Rust 1.99.1 and Cap'n Proto 1.5.0.
 - **Cycle 2 (`A2`): Turnkey Agent Skill Bundle & Pre-Push Lifecycle Hook (`ooo init-skill` / `ooo init-hooks`):**
   - Added turnkey agent skill bundle `skills/agent-ooo/SKILL.md` specifying operational triggers (`checkin`, `detox`, `spa`, `discharge`, `export`), harness setup guides (Antigravity, Claude Code, Cursor, OpenAI Codex CLI, and Git lifecycle hooks), and zero em dash compliance.
   - Implemented `ooo init-skill` CLI command (with alias `ooo init-hooks`) in `crates/cli/src/lib.rs` supporting `-t` / `--target`, `-H` / `--harness`, `--hooks`, `-f` / `--force`, and `--stdout` flags. Automatically embeds the skill template, generates `.git/hooks/pre-push` with a fast `ooo discharge` canary gate, and marks hook scripts executable on Unix.

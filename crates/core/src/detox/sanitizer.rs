@@ -151,6 +151,53 @@ pub fn mask_secret_preview(matched: &str) -> String {
     }
 }
 
+/// Fast byte-slice pre-check for ANSI CSI/OSC escape sequences (`0x1B`).
+#[inline]
+pub fn has_ansi_candidate(bytes: &[u8]) -> bool {
+    bytes.contains(&0x1B)
+}
+
+/// Fast byte-slice pre-check for any prefix and minimum length of `SECRET_RE`.
+#[inline]
+pub fn has_secret_candidate(bytes: &[u8]) -> bool {
+    // Shortest SECRET_RE match is AKIA[0-9A-Z]{16} (20 bytes).
+    if bytes.len() < 20 {
+        return false;
+    }
+
+    for i in 0..=(bytes.len() - 20) {
+        let tail = &bytes[i..];
+        let matched = match tail[0] {
+            b's' => tail.starts_with(b"sk-"),
+            b'A' => {
+                tail.starts_with(b"AIza") || tail.starts_with(b"AQ.") || tail.starts_with(b"AKIA")
+            }
+            b'g' => {
+                (tail.len() >= 4
+                    && tail[1] == b'h'
+                    && matches!(tail[2], b'p' | b'o' | b'u' | b's' | b'r')
+                    && tail[3] == b'_')
+                    || tail.starts_with(b"github_pat_")
+            }
+            b'e' => tail.starts_with(b"eyJ"),
+            b'b' | b'B' => tail.len() >= 27 && tail[..6].eq_ignore_ascii_case(b"bearer"),
+            b'-' => tail.starts_with(b"-----BEGIN "),
+            _ => false,
+        };
+        if matched {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Returns true when raw JSON bytes contain a `\u` escape that could decode into a secret prefix.
+#[inline]
+fn contains_json_unicode_escape(bytes: &[u8]) -> bool {
+    bytes.windows(2).any(|w| w == b"\\u")
+}
+
 fn scan_str_into(
     text: &str,
     line_num: usize,
@@ -158,6 +205,10 @@ fn scan_str_into(
     findings: &mut Vec<SecretFinding>,
     total_occurrences: &mut usize,
 ) {
+    if !has_secret_candidate(text.as_bytes()) {
+        return;
+    }
+
     for mat in SECRET_RE.find_iter(text) {
         let raw = mat.as_str();
         let token = normalize_secret_token(raw);
@@ -212,20 +263,32 @@ pub fn scan_transcript_secrets(path: &Path) -> crate::Result<TranscriptScanRepor
     let session_id = crate::checkin::discovery::session_id_for(&target_path);
 
     let file = File::open(&target_path)?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
 
     let mut index_by_hash: HashMap<blake3::Hash, usize> = HashMap::new();
     let mut findings: Vec<SecretFinding> = Vec::new();
     let mut lines_scanned = 0;
     let mut total_occurrences = 0;
+    let mut line = String::new();
+    let mut line_num = 0usize;
 
-    for (idx, line_res) in reader.lines().enumerate() {
-        let line = line_res?;
+    loop {
+        line.clear();
+        let bytes_read = reader.read_line(&mut line)?;
+        if bytes_read == 0 {
+            break;
+        }
+        line_num += 1;
+
         if line.trim().is_empty() {
             continue;
         }
-        let line_num = idx + 1;
         lines_scanned += 1;
+
+        let line_bytes = line.as_bytes();
+        if !has_secret_candidate(line_bytes) && !contains_json_unicode_escape(line_bytes) {
+            continue;
+        }
 
         if let Ok(value) = serde_json::from_str::<Value>(&line) {
             scan_json_value(
@@ -236,8 +299,9 @@ pub fn scan_transcript_secrets(path: &Path) -> crate::Result<TranscriptScanRepor
                 &mut total_occurrences,
             );
         } else {
+            let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
             scan_str_into(
-                &line,
+                trimmed,
                 line_num,
                 &mut index_by_hash,
                 &mut findings,
@@ -258,16 +322,32 @@ pub fn scan_transcript_secrets(path: &Path) -> crate::Result<TranscriptScanRepor
 
 /// Sanitizes a string by stripping ANSI escape codes and masking detected secrets.
 pub fn sanitize_content(content: &str) -> (String, usize) {
+    let bytes = content.as_bytes();
+    let check_secrets = has_secret_candidate(bytes);
+    let check_ansi = has_ansi_candidate(bytes);
+
+    if !check_secrets && !check_ansi {
+        return (content.to_owned(), 0);
+    }
+
     let mut redactions = 0;
 
     // First, mask secrets
-    let masked = SECRET_RE.replace_all(content, |_: &regex::Captures| {
-        redactions += 1;
-        "[REDACTED_SECRET]"
-    });
+    let masked = if check_secrets {
+        SECRET_RE.replace_all(content, |_: &regex::Captures| {
+            redactions += 1;
+            "[REDACTED_SECRET]"
+        })
+    } else {
+        std::borrow::Cow::Borrowed(content)
+    };
 
     // Second, strip ANSI escape codes
-    let cleaned = ANSI_RE.replace_all(&masked, "");
+    let cleaned = if check_ansi {
+        ANSI_RE.replace_all(&masked, "")
+    } else {
+        masked
+    };
 
     (cleaned.into_owned(), redactions)
 }
