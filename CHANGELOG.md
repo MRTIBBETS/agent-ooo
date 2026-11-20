@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- **Cycle 4 (`A4`): Shareable Terminal Vitals Card (`ooo checkin --card`):**
+  - Added `crates/cli/src/card.rs` implementing `render_vitals_card` and `format_compact_tokens` to print a compact, screenshot-ready 70-column Unicode box card (`╭─╮│╰╯├┤`) summarizing Session ID, Guest Condition, Loop Lock status, 10-cell Rot Index bar, Harness + Model, Activity (turns/calls/errors), Top 3 Tools, API Token Spend (`K`/`M`/`B` compact units + USD), and Secrets Masked (`scan_transcript_secrets` results).
+  - Enforced plain-text width accounting (`truncate_chars` and `render_row`) prior to `colored` ANSI styling so every row aligns cleanly across terminals regardless of color support or long field truncation.
+  - Added `--card` (`#[arg(long)] card: bool`) to `Commands::Checkin` in `crates/cli/src/lib.rs`, suppressing the ASCII banner and `[CHECKIN]` preamble when `--card` is passed.
+  - Added 3 unit tests in `crates/cli/src/card.rs` and `test_cli_checkin_card_flag_parsing` in `crates/cli/src/lib.rs` (`53` total workspace tests passing).
+  - Updated `README.md`, `llms.txt`, and `skills/agent-ooo/SKILL.md` to document `ooo checkin --card`.
+  - *Self-Review Fix:* Added an explicit `is_finite()` guard before clamping `receipt.degradation_score` in `render_vitals_card` so non-finite scores default cleanly to `0.00/10.0`.
+  - *Context:* Authored by Antigravity Tier-2 Subagent (Gemini 3.8 Flash) and reviewed by Coordinator using Rust 1.99.1 and Cap'n Proto 1.5.0.
 - **Cycle 3 (`A3`): Fast-Path Byte Pre-Filter & Benchmark Harness (`crates/core/src/detox/sanitizer.rs`):**
   - Added `has_ansi_candidate` (`bytes.contains(&0x1B)`), `has_secret_candidate` (20-byte minimum length check and single-pass prefix byte scan for `sk-`, `AIza`, `AQ.`, `AKIA`, `gh[pousr]_`, `github_pat_`, `eyJ`, case-insensitive `bearer`, and `-----BEGIN `), and `contains_json_unicode_escape` (`\\u` window check) in `crates/core/src/detox/sanitizer.rs`.
   - Updated `sanitize_content` to skip both `SECRET_RE` and `ANSI_RE` on clean strings and selectively invoke only the matching regex using `Cow::Borrowed`, and guarded `scan_str_into` with `has_secret_candidate`.

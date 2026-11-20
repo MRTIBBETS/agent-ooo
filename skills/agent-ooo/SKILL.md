@@ -30,6 +30,9 @@ What it returns:
 # Triage the most recent active session
 ooo checkin
 
+# Render a compact, screenshot-ready ANSI terminal vitals card
+ooo checkin --card
+
 # Non-interactive triage (skips interactive picker)
 ooo -y checkin
 

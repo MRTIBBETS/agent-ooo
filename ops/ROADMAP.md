@@ -15,7 +15,7 @@ All items are ranked by **user value x distribution leverage / complexity**. Aut
   - Pre-push git lifecycle hook installation (`.git/hooks/pre-push`) with fast `ooo discharge` clinical and behavioral canary gate.
 - [x] **A3. Fast-Path Byte Pre-Filter & Benchmark Harness (`Cycle 3`):**
   - Add fast byte-slice pre-checks in `sanitizer.rs` to skip regex matching on clean ASCII lines without `\x1b` or secret prefixes, plus a deterministic `cargo test --release` throughput benchmark fixture in `crates/core/tests/`.
-- [ ] **A4. Shareable Terminal Vitals Card (`ooo checkin --card`) (`Cycle 4`):**
+- [x] **A4. Shareable Terminal Vitals Card (`ooo checkin --card`) (`Cycle 4`):**
   - Render a compact, screenshot-ready ANSI terminal card summarizing Guest Condition, Rot Index, Harness + Model, Top Tools, API Token Spend, and Secrets Masked.
 
 ## Phase B: Active remediation & CI governance (`v0.4.0`)

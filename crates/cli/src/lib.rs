@@ -1,4 +1,5 @@
 pub mod banner;
+pub mod card;
 
 use agent_ooo_core::checkin::{discovery, parser, triage};
 use agent_ooo_core::detox::pipeline as detox_pipeline;
@@ -36,6 +37,9 @@ pub enum Commands {
     Checkin {
         /// Optional path to a specific transcript file (.jsonl)
         transcript: Option<String>,
+        /// Render a compact, screenshot-ready ANSI terminal vitals card
+        #[arg(long)]
+        card: bool,
     },
     /// Step 2: Strip ANSI noise, mask secrets, and offload massive payloads.
     #[command(display_order = 3)]
@@ -110,47 +114,55 @@ pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let quiet_stdout = matches!(&cli.command, Some(Commands::Export { output: None, .. }))
-        || matches!(&cli.command, Some(Commands::InitSkill { stdout: true, .. }));
+        || matches!(&cli.command, Some(Commands::InitSkill { stdout: true, .. }))
+        || matches!(&cli.command, Some(Commands::Checkin { card: true, .. }));
     if !quiet_stdout {
         banner::print_banner();
     }
 
     match &cli.command {
-        Some(Commands::Checkin { transcript }) => {
-            println!(
-                "{} Admitting session for checkin triage...",
-                "[CHECKIN]".bold().green()
-            );
+        Some(Commands::Checkin { transcript, card }) => {
+            if !*card {
+                println!(
+                    "{} Admitting session for checkin triage...",
+                    "[CHECKIN]".bold().green()
+                );
+            }
             let path =
                 discovery::resolve_transcript_path_with_mode(transcript.as_deref(), cli.latest)
                     .map_err(|e| anyhow::anyhow!(e))?;
             let metrics = parser::parse_transcript(&path)?;
             let receipt = triage::calculate_triage(&path, metrics);
-            println!("Session ID: {}", receipt.session_id);
-            println!(
-                "Guest Condition: {} | Rot Index: {:.2}/10.0",
-                receipt.condition.as_str().bold(),
-                receipt.degradation_score
-            );
-            println!(
-                "Harness: {} ({}) | Turns: {} | Tool Calls: {} ({} failed)",
-                receipt.vitals.agent_harness,
-                receipt.vitals.model_id,
-                receipt.vitals.total_turns,
-                receipt.vitals.total_tool_calls,
-                receipt.vitals.failed_tool_calls
-            );
-            if receipt.vitals.api_input_tokens > 0
-                || receipt.vitals.api_cache_read_tokens > 0
-                || receipt.vitals.api_output_tokens > 0
-            {
+            if *card {
+                let scan = agent_ooo_core::detox::sanitizer::scan_transcript_secrets(&path)?;
+                println!("{}", card::render_vitals_card(&receipt, &scan));
+            } else {
+                println!("Session ID: {}", receipt.session_id);
                 println!(
-                    "API Ledger: {} in | {} cache_read | {} out (~${:.4} est. session spend)",
-                    receipt.vitals.api_input_tokens,
-                    receipt.vitals.api_cache_read_tokens,
-                    receipt.vitals.api_output_tokens,
-                    receipt.vitals.estimated_session_cost_usd
+                    "Guest Condition: {} | Rot Index: {:.2}/10.0",
+                    receipt.condition.as_str().bold(),
+                    receipt.degradation_score
                 );
+                println!(
+                    "Harness: {} ({}) | Turns: {} | Tool Calls: {} ({} failed)",
+                    receipt.vitals.agent_harness,
+                    receipt.vitals.model_id,
+                    receipt.vitals.total_turns,
+                    receipt.vitals.total_tool_calls,
+                    receipt.vitals.failed_tool_calls
+                );
+                if receipt.vitals.api_input_tokens > 0
+                    || receipt.vitals.api_cache_read_tokens > 0
+                    || receipt.vitals.api_output_tokens > 0
+                {
+                    println!(
+                        "API Ledger: {} in | {} cache_read | {} out (~${:.4} est. session spend)",
+                        receipt.vitals.api_input_tokens,
+                        receipt.vitals.api_cache_read_tokens,
+                        receipt.vitals.api_output_tokens,
+                        receipt.vitals.estimated_session_cost_usd
+                    );
+                }
             }
         }
         Some(Commands::Detox { transcript, all }) => {
@@ -698,6 +710,38 @@ fi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cli_checkin_card_flag_parsing() {
+        let cli_default = Cli::try_parse_from(["ooo", "checkin"]).expect("parse checkin");
+        match cli_default.command {
+            Some(Commands::Checkin { transcript, card }) => {
+                assert_eq!(transcript, None);
+                assert!(!card);
+            }
+            _ => panic!("Expected Commands::Checkin"),
+        }
+
+        let cli_card =
+            Cli::try_parse_from(["ooo", "checkin", "--card"]).expect("parse checkin --card");
+        match cli_card.command {
+            Some(Commands::Checkin { transcript, card }) => {
+                assert_eq!(transcript, None);
+                assert!(card);
+            }
+            _ => panic!("Expected Commands::Checkin"),
+        }
+
+        let cli_card_path = Cli::try_parse_from(["ooo", "checkin", "session.jsonl", "--card"])
+            .expect("parse checkin path --card");
+        match cli_card_path.command {
+            Some(Commands::Checkin { transcript, card }) => {
+                assert_eq!(transcript, Some("session.jsonl".to_string()));
+                assert!(card);
+            }
+            _ => panic!("Expected Commands::Checkin"),
+        }
+    }
 
     #[test]
     fn test_cli_detox_all_flag_parsing() {
