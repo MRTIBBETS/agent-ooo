@@ -7,7 +7,7 @@ description: Autonomous context rot diagnostics, secret detox, loop severing, st
 
 Agent OOO is a high-performance local day spa, state compaction engine, and verification harness for AI coding agents. It detects context rot, masks leaked credentials, strips ANSI terminal escape noise, severs repetitive error loops, offloads oversized payloads into cold storage, and locks session state into zero-copy Cap'n Proto checkpoints.
 
-All treatments run locally in bounded memory. Source transcripts are never modified. Treatment receipts and artifacts are saved to `.agent-ooo/` in the workspace.
+All treatments run locally in bounded memory. Source transcripts are never modified unless `--redact-in-place` is explicitly passed. Treatment receipts and artifacts are saved to `.agent-ooo/` in the workspace.
 
 ## 1. Operational triggers and treatment menu
 
@@ -47,12 +47,14 @@ Run `ooo detox` (or MCP `detox`) when:
 * Output logs contain excessive terminal ANSI color or cursor escape noise.
 * Tool outputs exceed 512 KB and should be evicted into content-addressed cold storage.
 * Conducting a host-wide credential posture audit via `ooo detox --all` (or `ooo detox -a`).
+* Scrubbing leaked credentials directly out of historical transcript files with `ooo detox --redact-in-place --backup`.
 
 What it executes:
 * **Secret sanitization:** Masks Anthropic, OpenAI, Google (`AIza`, `AQ.`), GitHub, AWS, JWT (including decoded `role` claims), Bearer, and PEM keys. Credentials are masked as `prefix...suffix` and deduplicated with Blake3 digests so raw secrets are never echoed into context.
 * **Syntactic cleanse:** Strips ANSI escape sequences and normalizes whitespace in constant memory.
 * **CAS spillover:** Offloads payloads over 512 KB into `.agent-ooo/spillover/<blake3>.bin` and records recall handles in `LossManifest`.
 * **Machine-wide audit:** Scans every discovered session on the host across all 7 supported agent harnesses when `--all` is supplied.
+* **Safe in-place scrubbing:** When `--redact-in-place` is passed, streams each target file (including sibling `transcript_full.jsonl` files) line by line into a same-directory temp file, redacts secrets without altering clean lines or stripping ANSI sequences, optionally writes and `blake3`-verifies a `.bak` copy (`--backup`) without clobbering existing backups, and atomically replaces the target file.
 
 ```bash
 # Detox current session
@@ -60,6 +62,12 @@ ooo detox
 
 # Machine-wide credential scan across all sessions
 ooo detox --all
+
+# Scrub leaked secrets in place with a verified .bak backup
+ooo detox --redact-in-place --backup
+
+# Scrub all discovered sessions in place with verified backups
+ooo detox --all --redact-in-place --backup
 ```
 
 ### When to call spa

@@ -194,7 +194,7 @@ pub fn has_secret_candidate(bytes: &[u8]) -> bool {
 
 /// Returns true when raw JSON bytes contain a `\u` escape that could decode into a secret prefix.
 #[inline]
-fn contains_json_unicode_escape(bytes: &[u8]) -> bool {
+pub(crate) fn contains_json_unicode_escape(bytes: &[u8]) -> bool {
     bytes.windows(2).any(|w| w == b"\\u")
 }
 
@@ -320,35 +320,35 @@ pub fn scan_transcript_secrets(path: &Path) -> crate::Result<TranscriptScanRepor
     })
 }
 
-/// Sanitizes a string by stripping ANSI escape codes and masking detected secrets.
-pub fn sanitize_content(content: &str) -> (String, usize) {
-    let bytes = content.as_bytes();
-    let check_secrets = has_secret_candidate(bytes);
-    let check_ansi = has_ansi_candidate(bytes);
-
-    if !check_secrets && !check_ansi {
-        return (content.to_owned(), 0);
+fn mask_secrets_cow(content: &str) -> (std::borrow::Cow<'_, str>, usize) {
+    if !has_secret_candidate(content.as_bytes()) {
+        return (std::borrow::Cow::Borrowed(content), 0);
     }
 
     let mut redactions = 0;
+    let masked = SECRET_RE.replace_all(content, |_: &regex::Captures| {
+        redactions += 1;
+        "[REDACTED_SECRET]"
+    });
+    (masked, redactions)
+}
 
-    // First, mask secrets
-    let masked = if check_secrets {
-        SECRET_RE.replace_all(content, |_: &regex::Captures| {
-            redactions += 1;
-            "[REDACTED_SECRET]"
-        })
-    } else {
-        std::borrow::Cow::Borrowed(content)
-    };
+/// Masks detected secrets in `content` without stripping ANSI escape sequences.
+pub fn redact_secrets_only(content: &str) -> (String, usize) {
+    let (masked, redactions) = mask_secrets_cow(content);
+    (masked.into_owned(), redactions)
+}
 
-    // Second, strip ANSI escape codes
-    let cleaned = if check_ansi {
-        ANSI_RE.replace_all(&masked, "")
-    } else {
-        masked
-    };
+/// Sanitizes a string by stripping ANSI escape codes and masking detected secrets.
+pub fn sanitize_content(content: &str) -> (String, usize) {
+    let check_ansi = has_ansi_candidate(content.as_bytes());
+    let (masked, redactions) = mask_secrets_cow(content);
 
+    if !check_ansi {
+        return (masked.into_owned(), redactions);
+    }
+
+    let cleaned = ANSI_RE.replace_all(&masked, "");
     (cleaned.into_owned(), redactions)
 }
 

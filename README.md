@@ -47,6 +47,7 @@ ooo -y spa
 ooo checkin --card
 ooo spa ~/.claude/projects/<project>/<session>.jsonl
 ooo detox --all
+ooo detox --redact-in-place --backup
 ```
 
 Pass `-y` (or `--latest`) to skip the interactive session picker and automatically select the most recent active session. Non-interactive agent shells (`ANTIGRAVITY_AGENT=1`, `CLAUDECODE=1`, `CI=1`, or `TERM=dumb`) automatically select the latest session without blocking.
@@ -56,7 +57,7 @@ You can also book individual treatments (`checkin`, `detox`, `reset`, `discharge
 ### The 4-step treatment
 
 1. **Checkin (Intake, guest vitals & triage):** Admits the session to the spa, parses the transcript in a constant-memory stream (ignoring sidechain sub-queries), extracts guest vitals (agent harness, model ID, tool cadence and error rate, top tools, thinking ratio, and token pace), detects identical tool-and-argument loop locks, and assigns a 4-tier wellness condition (`Elite`, `Fit`, `Fair`, `Fatigued`) alongside a multi-factor "Rot Index." Pass `--card` to output a compact, color-coded ANSI terminal vitals card summarizing condition, rot index, top tools, API spend, and leaked secret counts.
-2. **Detox (Deep-tissue cleanse & credential hygiene):** Uses a fast-path byte-slice pre-filter in `sanitizer.rs` before regex or JSON DOM parsing to strip terminal ANSI escape codes and detect or mask leaked secrets (Anthropic, OpenAI, Google, GitHub, AWS, Bearer tokens, PEM private keys, and JWTs including decoded `role` claims such as `service_role`), pins Generation 0 system directives and durable user anchors, and spills payloads over 512 KB into `blake3` content-addressed cold storage while recording CAS recall handles. Pass `--all` (`-a`) to run a machine-wide credential posture audit across all discovered agent sessions.
+2. **Detox (Deep-tissue cleanse & credential hygiene):** Uses a fast-path byte-slice pre-filter in `sanitizer.rs` before regex or JSON DOM parsing to strip terminal ANSI escape codes and detect or mask leaked secrets (Anthropic, OpenAI, Google, GitHub, AWS, Bearer tokens, PEM private keys, and JWTs including decoded `role` claims such as `service_role`), pins Generation 0 system directives and durable user anchors, and spills payloads over 512 KB into `blake3` content-addressed cold storage while recording CAS recall handles. Pass `--all` (`-a`) to run a machine-wide credential posture audit across all discovered agent sessions, or pass `--redact-in-place` (optionally with `--backup` for a `blake3`-verified `.bak` copy) to atomically scrub leaked credentials from source transcripts (including sibling `transcript_full.jsonl` files) while preserving line endings and clean turns byte-for-byte.
 3. **Reset (Structural alignment & state compaction):** Correlates tool calls and outcomes across turns (`EventStream`), severs recursive intent-hash error loops within a 6-event sliding window, extracts durable user directives (`NegativeConstraint`) across the full session, captures `validIf`-bound host git registers, and locks both session metadata and the refreshed `gen0Arena` + `transientArena` conversation turns into a zero-copy Cap'n Proto checkpoint (`checkpoint.capnp`) alongside a portable JSON copy.
 4. **Discharge (Exit exam, cold-storage recall & spa report):** Runs the 5-check zero-LLM canary suite (`checkpoint_structural_integrity`, `unresolved_tool_failure`, `unverified_late_edit`, `stub_or_conflict_injection` via streaming `git diff -U0 HEAD`, and `environment_register_freshness` for git HEAD drift), evaluates exit wellness (`Elite`, `Fit`, `Fair`, `Fatigued`), supports bounded cold-storage payload retrieval (`ooo discharge --recall <blake3>`), and issues `.agent-ooo/spa_report.md` and `spa_report.json`.
 
@@ -123,7 +124,7 @@ The MCP tool surface mirrors the CLI subcommands 1:1:
 
 ## What gets written to `.agent-ooo/`
 
-Running a treatment leaves your source transcripts untouched and writes its artifacts to `.agent-ooo/` in the target workspace:
+Running a treatment leaves your source transcripts untouched (unless `ooo detox --redact-in-place` is explicitly passed) and writes its artifacts to `.agent-ooo/` in the target workspace:
 
 ```text
 .agent-ooo/

@@ -1,32 +1,32 @@
 # Agent OOO Operational Status
 
-**Last updated:** 2026-11-20
-**Latest release:** `v0.2.0` (with Cycle 0 Vision Alignment, Cycle 1 Multi-Harness & Detox `--all`, Cycle 2 Turnkey Skill & Lifecycle Hooks, Cycle 3 Fast-Path Byte Pre-Filter, and Cycle 4 Shareable Vitals Card on `main`)
-**Active sprint:** `v0.3.0` Phase A Complete -> `v0.4.0` Phase B Active Remediation (Next up: Cycle 5 `B1` Safe In-Place Transcript Scrubbing `ooo detox --redact-in-place --backup`)
-**Overall health:** Green (`53/53` tests passing, `0` clippy warnings, `39.17 ms` full spa latency, `13.09 MB` peak RSS)
+**Last updated:** 2026-11-23
+**Latest release:** `v0.2.0` (with Phase A `A0` through `A4` complete plus Cycle 5 Safe In-Place Transcript Scrubbing on `main`)
+**Active sprint:** `v0.4.0` Phase B Active Remediation & CI Governance (Next up: Cycle 6 `B2` Git Pre-Push Canary Gate `ooo hook install`)
+**Overall health:** Green (`60/60` tests passing, `0` clippy warnings, `42.74 ms` full spa latency, `13.77 MB` peak RSS)
 
 ## 1. Executive pulse
 
-* **What just shipped (`Cycle 4` / Roadmap `A4`):**
-  * **Shareable Terminal Vitals Card (`crates/cli/src/card.rs`, `crates/cli/src/lib.rs`):** Added `ooo checkin --card` to render a compact, screenshot-ready 70-column ANSI terminal box card (`╭─╮│╰╯├┤`) summarizing Session ID, Guest Condition + Loop Lock status, 10-cell Rot Index bar, Harness + Model, Activity, Top 3 Tools, API Token Spend (`K`/`M`/`B` compact units + USD), and Secrets Masked (`scan_transcript_secrets`). Suppresses the ASCII banner and `[CHECKIN]` preamble when `--card` is passed, and aligns all borders deterministically before applying `colored` ANSI styles.
-  * **Test Coverage & Documentation (`53/53` Passing):** Added 3 unit tests in `crates/cli/src/card.rs` (ANSI-stripped width alignment, compact token scaling, truncation of long fields, `Fatigued` / leaked secrets edge case, zero em dashes) plus `test_cli_checkin_card_flag_parsing` in `crates/cli/src/lib.rs`. Synced `README.md`, `llms.txt`, and `skills/agent-ooo/SKILL.md`.
-  * **Fresh Scheduled Autonomous Execution Under Budget:** Cycle 4 ran in a fresh unattended session (`95d386a8`) delegating implementation, tests, and docs sync to Flash (`103bff8e`). Reported `ooo checkin` ledger total was **`$0.7353`** (`$0.6727` subagent at fallback rate + `$0.0626` coordinator; `$0.1578` at Flash rates), within the `< $1.00` hard guardrail.
-* **Next queued slice (`Cycle 5` / Roadmap `B1`):**
-  * **Safe In-Place Transcript Scrubbing (`ooo detox --redact-in-place --backup`):** Allow developers to purge leaked credentials from historical `.jsonl` logs on disk using atomic temp-file replacement + `.bak` backup verification.
+* **What just shipped (`Cycle 5` / Roadmap `B1`):**
+  * **Safe In-Place Transcript Scrubbing (`crates/core/src/detox/scrub.rs`, `crates/core/src/detox/sanitizer.rs`, `crates/cli/src/lib.rs`):** Added `ooo detox --redact-in-place [--backup]` (compatible with both single-session resolution including sibling `transcript_full.jsonl` files and `--all` machine-wide sweeps). Streams line by line in constant memory using fast-path byte pre-filtering, preserves clean lines and line endings (`\r\n`/`\n`) byte-for-byte, preserves structural JSON keys (`id`, `uuid`, `sessionId`, etc.) and ANSI escapes via `redact_secrets_only`, rejects directories/symlinks, writes and `blake3`-verifies `.bak` backups without clobbering existing backups, and atomically swaps via same-directory `NamedTempFile::persist`.
+  * **Test Coverage & Documentation (`60/60` Passing):** Added 6 unit tests in `crates/core/src/detox/scrub.rs` (including idempotent re-run when `.bak` exists on clean files) and `test_cli_detox_redact_in_place_flag_parsing` in `crates/cli/src/lib.rs`. Synced `README.md`, `llms.txt`, and `skills/agent-ooo/SKILL.md`.
+  * **Fresh Scheduled Autonomous Execution:** Cycle 5 ran in a fresh unattended session (`f7fd861b`) delegating implementation, tests, and docs sync to Flash (`7297bb6d`). Reported `ooo checkin` ledger total was **`$1.6878`** (`$0.9683` subagent + `$0.7195` coordinator at `gemini-4-hydrogen-tiered-high` fallback rate; `$0.8557` with subagent at Flash rates).
+* **Next queued slice (`Cycle 6` / Roadmap `B2`):**
+  * **Git Pre-Push Canary Gate (`ooo hook install`):** Optional 5 ms `.git/hooks/pre-push` gate that warns or blocks pushes when `Discharge` reports `FAIL` canaries or unredacted workspace secrets.
 * **Schedule & founder action item:**
-  * Recurring schedule is configured in `agent-ooo-autonomous-sprint` (`Mon / Wed / Fri at 9:00 AM PT`; next window: **Monday, Nov 23, 2026 at 9:00 AM PT**). Phase A (`A0` through `A4`) is now `100%` complete on `main` and ready for a `v0.3.0` release tag whenever desired.
+  * Recurring schedule is configured in `agent-ooo-autonomous-sprint` (`Mon / Wed / Fri at 9:00 AM PT`; next window: **Wednesday, Nov 25, 2026 at 9:00 AM PT**). Phase A (`A0` through `A4`) is `100%` complete on `main` and `B1` has landed for `v0.4.0`.
 
 ## 2. Core KPIs, growth & credit ledger
 
-| Category | Metric | Previous (`Cycle 3`) | Current (`Cycle 4`, 2026-11-20) | Target (`v0.3.0`) |
+| Category | Metric | Previous (`Cycle 4`) | Current (`Cycle 5`, 2026-11-23) | Target (`v0.4.0`) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Product Quality** | Workspace unit + integration tests | `49` passing | `53` passing (`0` failing) | `50+` passing (Met) |
-| **Engine Speed** | `ooo spa` release latency (current session) | `38.88 ms` | `39.17 ms` | `< 50 ms` (Met) |
-| **Memory Bound** | Peak RSS (`maximum resident set size`) | `13.61 MB` | `13.09 MB` (`7.17 MB` peak footprint) | `< 24 MB` (Met) |
-| **Coverage** | Supported agent harnesses | `7` + Skill, Hooks & Pre-Filter | `7` + Skill, Hooks, Pre-Filter & Vitals Card | `7+` (Met) |
+| **Product Quality** | Workspace unit + integration tests | `53` passing | `60` passing (`0` failing) | `60+` passing (Met) |
+| **Engine Speed** | `ooo spa` release latency (current session) | `39.17 ms` | `42.74 ms` | `< 50 ms` (Met) |
+| **Memory Bound** | Peak RSS (`maximum resident set size`) | `13.09 MB` | `13.77 MB` (`7.78 MB` peak footprint) | `< 24 MB` (Met) |
+| **Coverage** | Supported agent harnesses | `7` + Skill, Hooks, Pre-Filter & Vitals Card | `7` + Skill, Hooks, Pre-Filter, Vitals Card & In-Place Scrubbing | `7+` (Met) |
 | **Distribution** | GitHub release downloads (cumulative across tags) | `20` (`4` on `v0.2.0`) | `20` (`4` on `v0.2.0`) | `100+` |
 | **Distribution** | GitHub stars / forks / open issues | `1` / `0` / `0` | `1` / `0` / `0` | Track weekly delta |
-| **Ops Credit Spend** | Fresh autonomous cycle token & spend ledger | `$0.8428` (`$0.1983` Flash eq.) | `$0.6727` Flash (`83.1k` in / `20.7k` out, fallback rate) + `$0.0626` Coordinator (`79.8k` in / `7.4k` out) = **`$0.7353`** (`$0.1578` Flash eq.) | `< $1.00` / fresh autonomous run (Met) |
+| **Ops Credit Spend** | Fresh autonomous cycle token & spend ledger | `$0.7353` (`$0.1578` Flash eq.) | `$0.9683` Subagent (`105.8k` in / `28.5k` out, fallback rate) + `$0.7195` Coordinator (`100.3k` in / `16.3k` out) = **`$1.6878`** (`$0.8557` with subagent at Flash rates) | `< $1.00` / fresh autonomous run |
 
 ## 3. Model routing & cost governance charter
 

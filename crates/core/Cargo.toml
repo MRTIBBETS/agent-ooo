@@ -14,9 +14,7 @@ regex.workspace = true
 blake3.workspace = true
 thiserror.workspace = true
 dialoguer = "0.12.0"
+tempfile = "3.27.0"
 
 [build-dependencies]
 capnpc.workspace = true
-
-[dev-dependencies]
-tempfile = "3.27.0"

@@ -49,6 +49,12 @@ pub enum Commands {
         /// Scan all discovered sessions across all local agent harnesses for leaked credentials
         #[arg(short, long)]
         all: bool,
+        /// Safely scrub leaked secrets directly from source transcript files in place
+        #[arg(long)]
+        redact_in_place: bool,
+        /// Create and verify a .bak copy before replacing a modified transcript in place (requires --redact-in-place)
+        #[arg(long)]
+        backup: bool,
     },
     /// Step 3: Sever error loops and write zero-copy checkpoints.
     #[command(display_order = 4)]
@@ -165,11 +171,21 @@ pub fn run() -> anyhow::Result<()> {
                 }
             }
         }
-        Some(Commands::Detox { transcript, all }) => {
+        Some(Commands::Detox {
+            transcript,
+            all,
+            redact_in_place,
+            backup,
+        }) => {
+            validate_detox_flags(*redact_in_place, *backup)?;
             println!(
                 "{} Syntactic cleanse initiated...",
                 "[DETOX]".bold().yellow()
             );
+            if *redact_in_place {
+                handle_detox_in_place(transcript.as_deref(), cli.latest, *all, *backup)?;
+                return Ok(());
+            }
             if *all {
                 let candidates = discovery::discover_recent_transcripts();
                 let mut sessions_with_secrets = 0usize;
@@ -559,6 +575,129 @@ pub fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn validate_detox_flags(redact_in_place: bool, backup: bool) -> anyhow::Result<()> {
+    if backup && !redact_in_place {
+        anyhow::bail!("--backup requires --redact-in-place");
+    }
+    Ok(())
+}
+
+fn print_in_place_receipt(receipt: &agent_ooo_core::detox::scrub::InPlaceRedactionReceipt) {
+    if receipt.modified {
+        println!(
+            "Target: {} | Status: {} | Lines Modified: {}/{} | Redactions: {} | Bytes: {} -> {}",
+            receipt.target_path,
+            "modified".yellow().bold(),
+            receipt.lines_modified,
+            receipt.lines_scanned,
+            receipt.redactions_count,
+            receipt.bytes_before,
+            receipt.bytes_after
+        );
+        if let Some(ref bp) = receipt.backup_path {
+            println!(
+                "  Backup: {} (verified: {})",
+                bp,
+                if receipt.backup_verified {
+                    "yes".green()
+                } else {
+                    "no".red()
+                }
+            );
+        }
+        println!(
+            "  BLAKE3: {} -> {}",
+            receipt.original_blake3, receipt.final_blake3
+        );
+    } else {
+        println!(
+            "Target: {} | Status: {} | Lines Scanned: {} | Bytes: {} | BLAKE3: {}",
+            receipt.target_path,
+            "clean (unchanged)".green(),
+            receipt.lines_scanned,
+            receipt.bytes_before,
+            receipt.original_blake3
+        );
+    }
+}
+
+fn handle_detox_in_place(
+    transcript: Option<&str>,
+    latest: bool,
+    all: bool,
+    backup: bool,
+) -> anyhow::Result<()> {
+    if all {
+        let candidates = discovery::discover_recent_transcripts();
+        let mut seen = std::collections::HashSet::new();
+        let mut targets = Vec::new();
+        for candidate in &candidates {
+            for target in agent_ooo_core::detox::scrub::resolve_in_place_targets(&candidate.path) {
+                if seen.insert(target.clone()) {
+                    targets.push(target);
+                }
+            }
+        }
+
+        let mut scanned = 0usize;
+        let mut modified = 0usize;
+        let mut total_redactions = 0usize;
+        let mut backups_verified = 0usize;
+        let mut failed = 0usize;
+
+        for target in &targets {
+            match agent_ooo_core::detox::scrub::redact_transcript_in_place(target, backup) {
+                Ok(receipt) => {
+                    scanned += 1;
+                    if receipt.modified {
+                        modified += 1;
+                        total_redactions += receipt.redactions_count;
+                        if receipt.backup_verified {
+                            backups_verified += 1;
+                        }
+                        print_in_place_receipt(&receipt);
+                    }
+                }
+                Err(err) => {
+                    failed += 1;
+                    eprintln!("  {} {}: {}", "[ERROR]".red().bold(), target.display(), err);
+                }
+            }
+        }
+
+        println!(
+            "Targets Scanned: {} | Files Modified: {} | Total Redactions: {} | Backups Verified: {} | Errors: {}",
+            scanned, modified, total_redactions, backups_verified, failed
+        );
+        if modified == 0 && failed == 0 {
+            println!(
+                "{}",
+                "Clean bill of health: No leaked secrets required in-place redaction."
+                    .green()
+                    .bold()
+            );
+        }
+        if failed > 0 {
+            anyhow::bail!("{} target(s) failed during in-place redaction.", failed);
+        }
+        return Ok(());
+    }
+
+    let path = discovery::resolve_transcript_path_with_mode(transcript, latest)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let targets = agent_ooo_core::detox::scrub::resolve_in_place_targets(&path);
+    let mut seen = std::collections::HashSet::new();
+    for target in targets {
+        if !seen.insert(target.clone()) {
+            continue;
+        }
+        let receipt = agent_ooo_core::detox::scrub::redact_transcript_in_place(&target, backup)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        print_in_place_receipt(&receipt);
+    }
+    Ok(())
+}
+
 pub const SKILL_TEMPLATE: &str = include_str!("../../../skills/agent-ooo/SKILL.md");
 
 pub fn handle_init_skill(
@@ -748,9 +887,16 @@ mod tests {
         let args = ["agent-ooo", "detox", "--all"];
         let cli = Cli::try_parse_from(args).expect("parse detox --all");
         match cli.command {
-            Some(Commands::Detox { transcript, all }) => {
+            Some(Commands::Detox {
+                transcript,
+                all,
+                redact_in_place,
+                backup,
+            }) => {
                 assert!(all);
                 assert_eq!(transcript, None);
+                assert!(!redact_in_place);
+                assert!(!backup);
             }
             _ => panic!("Expected Commands::Detox"),
         }
@@ -758,9 +904,16 @@ mod tests {
         let args_short = ["agent-ooo", "detox", "-a"];
         let cli_short = Cli::try_parse_from(args_short).expect("parse detox -a");
         match cli_short.command {
-            Some(Commands::Detox { transcript, all }) => {
+            Some(Commands::Detox {
+                transcript,
+                all,
+                redact_in_place,
+                backup,
+            }) => {
                 assert!(all);
                 assert_eq!(transcript, None);
+                assert!(!redact_in_place);
+                assert!(!backup);
             }
             _ => panic!("Expected Commands::Detox"),
         }
@@ -768,12 +921,88 @@ mod tests {
         let args_path = ["agent-ooo", "detox", "custom.jsonl"];
         let cli_path = Cli::try_parse_from(args_path).expect("parse detox path");
         match cli_path.command {
-            Some(Commands::Detox { transcript, all }) => {
+            Some(Commands::Detox {
+                transcript,
+                all,
+                redact_in_place,
+                backup,
+            }) => {
                 assert!(!all);
                 assert_eq!(transcript, Some("custom.jsonl".to_string()));
+                assert!(!redact_in_place);
+                assert!(!backup);
             }
             _ => panic!("Expected Commands::Detox"),
         }
+    }
+
+    #[test]
+    fn test_cli_detox_redact_in_place_flag_parsing() {
+        let cli_in_place = Cli::try_parse_from(["ooo", "detox", "--redact-in-place"])
+            .expect("parse detox --redact-in-place");
+        match cli_in_place.command {
+            Some(Commands::Detox {
+                transcript,
+                all,
+                redact_in_place,
+                backup,
+            }) => {
+                assert_eq!(transcript, None);
+                assert!(!all);
+                assert!(redact_in_place);
+                assert!(!backup);
+            }
+            _ => panic!("Expected Commands::Detox"),
+        }
+
+        let cli_backup = Cli::try_parse_from([
+            "ooo",
+            "detox",
+            "--redact-in-place",
+            "--backup",
+            "session.jsonl",
+        ])
+        .expect("parse detox --redact-in-place --backup");
+        match cli_backup.command {
+            Some(Commands::Detox {
+                transcript,
+                all,
+                redact_in_place,
+                backup,
+            }) => {
+                assert_eq!(transcript, Some("session.jsonl".to_string()));
+                assert!(!all);
+                assert!(redact_in_place);
+                assert!(backup);
+            }
+            _ => panic!("Expected Commands::Detox"),
+        }
+
+        let cli_all_in_place =
+            Cli::try_parse_from(["ooo", "detox", "--all", "--redact-in-place", "--backup"])
+                .expect("parse detox --all --redact-in-place --backup");
+        match cli_all_in_place.command {
+            Some(Commands::Detox {
+                transcript,
+                all,
+                redact_in_place,
+                backup,
+            }) => {
+                assert_eq!(transcript, None);
+                assert!(all);
+                assert!(redact_in_place);
+                assert!(backup);
+            }
+            _ => panic!("Expected Commands::Detox"),
+        }
+
+        assert!(validate_detox_flags(false, false).is_ok());
+        assert!(validate_detox_flags(true, false).is_ok());
+        assert!(validate_detox_flags(true, true).is_ok());
+        let err = validate_detox_flags(false, true).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("--backup requires --redact-in-place"));
     }
 
     #[test]

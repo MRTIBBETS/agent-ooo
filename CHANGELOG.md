@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- **Cycle 5 (`B1`): Safe In-Place Transcript Scrubbing (`ooo detox --redact-in-place --backup`):**
+  - Added `crates/core/src/detox/scrub.rs` implementing `redact_transcript_in_place`, `resolve_in_place_targets`, and `InPlaceRedactionReceipt` with constant-memory `BufReader::read_line` streaming, fast-path byte pre-filtering, structural JSON key preservation, non-JSON fallback redaction, and original line ending (`\r\n` / `\n`) retention.
+  - Added `redact_secrets_only` in `crates/core/src/detox/sanitizer.rs` (sharing `mask_secrets_cow` with `sanitize_content`) to surgically mask leaked credentials in historical logs without stripping ANSI escape sequences or altering clean turns.
+  - Added atomic same-directory `NamedTempFile` replacement, `symlink_metadata` directory/symlink guards, permission preservation, and optional `.bak` backup creation with pre-persist and on-disk `blake3` + byte-length verification (`persist_noclobber`).
+  - Added `--redact-in-place` and `--backup` flags to `Commands::Detox` in `crates/cli/src/lib.rs` (supporting single-session sibling `transcript_full.jsonl` scrubbing and `--all` machine-wide remediation with target deduplication).
+  - Added 6 unit tests across `crates/core/src/detox/scrub.rs` and `crates/cli/src/lib.rs` (`60` total workspace tests passing) and synced `README.md`, `llms.txt`, and `skills/agent-ooo/SKILL.md`.
+  - *Self-Review Fix:* Moved the existing-`.bak` check from pre-scan into `create_verified_backup` (invoked only when `redactions_count > 0`) and added `test_in_place_redaction_idempotent_when_backup_already_exists_on_clean_file` so repeated `--all --redact-in-place --backup` runs cleanly skip already-scrubbed files even when a prior `.bak` exists.
+  - *Context:* Authored by Antigravity Tier-2 Subagent (Gemini 3.8 Flash) and reviewed by Coordinator using Rust 1.99.1 and Cap'n Proto 1.5.0.
 - **Cycle 4 (`A4`): Shareable Terminal Vitals Card (`ooo checkin --card`):**
   - Added `crates/cli/src/card.rs` implementing `render_vitals_card` and `format_compact_tokens` to print a compact, screenshot-ready 70-column Unicode box card (`╭─╮│╰╯├┤`) summarizing Session ID, Guest Condition, Loop Lock status, 10-cell Rot Index bar, Harness + Model, Activity (turns/calls/errors), Top 3 Tools, API Token Spend (`K`/`M`/`B` compact units + USD), and Secrets Masked (`scan_transcript_secrets` results).
   - Enforced plain-text width accounting (`truncate_chars` and `render_row`) prior to `colored` ANSI styling so every row aligns cleanly across terminals regardless of color support or long field truncation.

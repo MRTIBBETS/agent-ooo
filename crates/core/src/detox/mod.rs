@@ -4,6 +4,7 @@ pub mod arena;
 pub mod exporter;
 pub mod pipeline;
 pub mod sanitizer;
+pub mod scrub;
 pub mod spillover;
 
 use serde::{Deserialize, Serialize};
