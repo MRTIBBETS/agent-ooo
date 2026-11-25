@@ -52,7 +52,7 @@ ooo detox --redact-in-place --backup
 
 Pass `-y` (or `--latest`) to skip the interactive session picker and automatically select the most recent active session. Non-interactive agent shells (`ANTIGRAVITY_AGENT=1`, `CLAUDECODE=1`, `CI=1`, or `TERM=dumb`) automatically select the latest session without blocking.
 
-You can also book individual treatments (`checkin`, `detox`, `reset`, `discharge`, `export`, `init-skill`) a la carte. Run `ooo checkin --card` to render a compact, screenshot-ready terminal vitals card (without the ASCII banner), or run `ooo detox --all` (or `-a`) to run a machine-wide credential posture scan across every discovered session on the host.
+You can also book individual treatments (`checkin`, `detox`, `reset`, `discharge`, `export`, `hook`, `init-skill`) a la carte. Run `ooo checkin --card` to render a compact, screenshot-ready terminal vitals card (without the ASCII banner), or run `ooo detox --all` (or `-a`) to run a machine-wide credential posture scan across every discovered session on the host.
 
 ### The 4-step treatment
 
@@ -72,17 +72,27 @@ ooo export --format handoff --max-turns 50 --output handoff.md
 
 When `--output` is omitted, `ooo export` suppresses the ASCII banner and streams directly to `stdout` so it can be piped safely without leaking `.env` keys or multi-megabyte tool payloads.
 
-### Turnkey agent skill & lifecycle hooks (`ooo init-skill`)
+### Turnkey agent skill & lifecycle hooks (`ooo init-skill`, `ooo hook`)
 
-Generate the turnkey Agent OOO skill bundle (`skills/agent-ooo/SKILL.md`) and pre-push git verification hooks for your project:
+Generate the turnkey Agent OOO skill bundle (`skills/agent-ooo/SKILL.md`) and manage the pre-push canary and secret hygiene gate for your project:
 
 ```bash
 # Generate skill bundle in ./skills/agent-ooo
 ooo init-skill
 
-# Install pre-push git hook running ooo discharge before git push
+# Install pre-push git hook running ooo hook check before git push
+ooo hook install
+
+# Install in non-blocking warn-only mode
+ooo hook install --warn-only
+
+# Inspect hook status, run the gate manually, or remove the hook
+ooo hook status
+ooo hook check
+ooo hook uninstall
+
+# Or install skill bundle + pre-push hook together:
 ooo init-skill --hooks
-# Or using the alias:
 ooo init-hooks
 
 # Target a specific agent harness (antigravity, claude, cursor, codex, git, all)
@@ -92,7 +102,7 @@ ooo init-skill -H claude --target .claude/skills/agent-ooo
 ooo init-skill --stdout
 ```
 
-The generated skill teaches agents when to book each treatment (`checkin`, `detox`, `spa`, `discharge`, `export`) and provides harness configuration examples for Antigravity, Claude Code, Cursor, Codex CLI, and Git lifecycle hooks.
+The `ooo hook check` gate verifies `.agent-ooo/` checkpoint canaries (when present), scans `.agent-ooo/` artifacts, unpushed git commit diffs, staged/unstaged tracked diffs, and bounded untracked files for leaked credentials, and blocks `git push` unless `--warn-only` is active. The generated skill teaches agents when to book each treatment (`checkin`, `detox`, `spa`, `discharge`, `export`) and provides harness configuration examples for Antigravity, Claude Code, Cursor, Codex CLI, and Git lifecycle hooks.
 
 ## Self-care via MCP (`agent-ooo-mcp`)
 

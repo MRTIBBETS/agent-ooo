@@ -1,5 +1,6 @@
 pub mod banner;
 pub mod card;
+pub mod hook;
 
 use agent_ooo_core::checkin::{discovery, parser, triage};
 use agent_ooo_core::detox::pipeline as detox_pipeline;
@@ -114,6 +115,12 @@ pub enum Commands {
         #[arg(long)]
         stdout: bool,
     },
+    /// Manage and execute the Git pre-push canary and secret hygiene gate.
+    #[command(display_order = 9)]
+    Hook {
+        #[command(subcommand)]
+        action: hook::HookAction,
+    },
 }
 
 pub fn run() -> anyhow::Result<()> {
@@ -121,7 +128,13 @@ pub fn run() -> anyhow::Result<()> {
 
     let quiet_stdout = matches!(&cli.command, Some(Commands::Export { output: None, .. }))
         || matches!(&cli.command, Some(Commands::InitSkill { stdout: true, .. }))
-        || matches!(&cli.command, Some(Commands::Checkin { card: true, .. }));
+        || matches!(&cli.command, Some(Commands::Checkin { card: true, .. }))
+        || matches!(
+            &cli.command,
+            Some(Commands::Hook {
+                action: hook::HookAction::Check { .. }
+            })
+        );
     if !quiet_stdout {
         banner::print_banner();
     }
@@ -563,6 +576,9 @@ pub fn run() -> anyhow::Result<()> {
         }) => {
             handle_init_skill(target.as_deref(), harness, *hooks, *force, *stdout)?;
         }
+        Some(Commands::Hook { action }) => {
+            hook::handle_hook_command(action)?;
+        }
         None => {
             println!(
                 "Run '{}' or '{}' to begin.",
@@ -782,46 +798,8 @@ pub fn handle_init_skill_with_base(
     let should_install_hooks = hooks || lower_harness == "git";
     if should_install_hooks {
         let git_dir = base_dir.join(".git");
-        if git_dir.exists() {
-            let hooks_dir = git_dir.join("hooks");
-            std::fs::create_dir_all(&hooks_dir)?;
-            let pre_push_path = hooks_dir.join("pre-push");
-
-            if pre_push_path.exists() && !force {
-                anyhow::bail!(
-                    "Git pre-push hook already exists at {}. Pass --force to overwrite.",
-                    pre_push_path.display()
-                );
-            }
-
-            let hook_script = r#"#!/usr/bin/env bash
-# Agent OOO Git Pre-Push Canary Hook
-# Verifies checkpoint integrity, unresolved tool failures, and unverified late edits.
-
-set -euo pipefail
-
-if command -v ooo >/dev/null 2>&1; then
-    echo "[agent-ooo] Running discharge canary gate prior to push..."
-    ooo discharge
-elif command -v agent-ooo >/dev/null 2>&1; then
-    echo "[agent-ooo] Running discharge canary gate prior to push..."
-    agent-ooo discharge
-else
-    exit 0
-fi
-"#;
-            std::fs::write(&pre_push_path, hook_script)?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(metadata) = std::fs::metadata(&pre_push_path) {
-                    let mut perms = metadata.permissions();
-                    perms.set_mode(0o755);
-                    let _ = std::fs::set_permissions(&pre_push_path, perms);
-                }
-            }
-
+        if git_dir.is_dir() {
+            let pre_push_path = hook::install_pre_push_hook(base_dir, false, force)?;
             println!(
                 "  {} Git pre-push hook installed to: {}",
                 "✓".green(),
@@ -1105,7 +1083,7 @@ mod tests {
         let pre_push = git_dir.join("hooks").join("pre-push");
         assert!(pre_push.exists());
         let hook_content = std::fs::read_to_string(&pre_push).unwrap();
-        assert!(hook_content.contains("ooo discharge"));
+        assert!(hook_content.contains("ooo hook check"));
 
         #[cfg(unix)]
         {
@@ -1113,5 +1091,118 @@ mod tests {
             let perms = std::fs::metadata(&pre_push).unwrap().permissions();
             assert_ne!(perms.mode() & 0o111, 0, "hook must be executable");
         }
+    }
+
+    #[test]
+    fn test_cli_hook_subcommands_parsing_and_execution() {
+        let cli_install = Cli::try_parse_from([
+            "ooo",
+            "hook",
+            "install",
+            "--warn-only",
+            "--force",
+            "--path",
+            "/tmp/repo",
+        ])
+        .expect("parse hook install");
+        match cli_install.command {
+            Some(Commands::Hook {
+                action:
+                    hook::HookAction::Install {
+                        warn_only,
+                        force,
+                        path,
+                    },
+            }) => {
+                assert!(warn_only);
+                assert!(force);
+                assert_eq!(path, Some("/tmp/repo".to_string()));
+            }
+            _ => panic!("Expected Commands::Hook Install"),
+        }
+
+        let cli_status = Cli::try_parse_from(["ooo", "hook", "status"]).expect("parse hook status");
+        assert!(matches!(
+            cli_status.command,
+            Some(Commands::Hook {
+                action: hook::HookAction::Status { path: None }
+            })
+        ));
+
+        let cli_uninstall = Cli::try_parse_from(["ooo", "hook", "uninstall", "--force"])
+            .expect("parse hook uninstall");
+        assert!(matches!(
+            cli_uninstall.command,
+            Some(Commands::Hook {
+                action: hook::HookAction::Uninstall {
+                    force: true,
+                    path: None
+                }
+            })
+        ));
+
+        let cli_check = Cli::try_parse_from([
+            "ooo",
+            "hook",
+            "check",
+            "--warn-only",
+            "--stdin",
+            "--range",
+            "origin/main..HEAD",
+        ])
+        .expect("parse hook check");
+        match cli_check.command {
+            Some(Commands::Hook {
+                action:
+                    hook::HookAction::Check {
+                        warn_only,
+                        range,
+                        stdin,
+                        path,
+                    },
+            }) => {
+                assert!(warn_only);
+                assert_eq!(range, Some("origin/main..HEAD".to_string()));
+                assert!(stdin);
+                assert_eq!(path, None);
+            }
+            _ => panic!("Expected Commands::Hook Check"),
+        }
+
+        // End-to-end execution via handle_hook_command on a temporary repo
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp_dir.path().join(".git")).unwrap();
+        let path_str = temp_dir.path().to_string_lossy().to_string();
+
+        hook::handle_hook_command(&hook::HookAction::Install {
+            warn_only: true,
+            force: false,
+            path: Some(path_str.clone()),
+        })
+        .expect("install warn-only hook");
+
+        let hook_file = temp_dir.path().join(".git/hooks/pre-push");
+        let script = std::fs::read_to_string(&hook_file).unwrap();
+        assert!(script.contains("ooo hook check --warn-only --stdin"));
+
+        hook::handle_hook_command(&hook::HookAction::Status {
+            path: Some(path_str.clone()),
+        })
+        .expect("status hook");
+
+        hook::handle_hook_command(&hook::HookAction::Check {
+            warn_only: false,
+            range: None,
+            stdin: false,
+            path: Some(path_str.clone()),
+        })
+        .expect("check clean temp repo");
+
+        hook::handle_hook_command(&hook::HookAction::Uninstall {
+            force: false,
+            path: Some(path_str),
+        })
+        .expect("uninstall hook");
+        assert!(!hook_file.exists());
     }
 }

@@ -201,25 +201,38 @@ For OpenAI Codex CLI environments:
 
 ### Git lifecycle hooks
 
-Install a fast pre-push canary gate that prevents pushing broken or unverified code to remotes.
+Install a fast pre-push canary and secret hygiene gate that prevents pushing broken, unverified, or credential-leaking code to remotes.
 
-1. Install the pre-push hook:
+1. Install the pre-push hook (or pass `--warn-only` for non-blocking warnings):
    ```bash
+   ooo hook install
+   # Non-blocking mode:
+   ooo hook install --warn-only
+   # Or install alongside the skill bundle:
    ooo init-skill --hooks
-   # Or using the alias:
    ooo init-hooks
    ```
-2. This creates `.git/hooks/pre-push` with executable permissions:
+2. Manage or run the gate manually at any time:
+   ```bash
+   ooo hook status
+   ooo hook check
+   ooo hook check --warn-only
+   ooo hook uninstall
+   ```
+3. This creates `.git/hooks/pre-push` with executable permissions:
    ```bash
    #!/usr/bin/env bash
+   # Agent OOO Git Pre-Push Canary Gate
    set -euo pipefail
    if command -v ooo >/dev/null 2>&1; then
-       ooo discharge
+       ooo hook check --stdin
    elif command -v agent-ooo >/dev/null 2>&1; then
-       agent-ooo discharge
+       agent-ooo hook check --stdin
+   else
+       exit 0
    fi
    ```
-3. Any git push will automatically execute the 5-point canary suite prior to pushing commits.
+4. Any `git push` will automatically execute the `.agent-ooo/` canary suite (when a checkpoint exists) and scan unpushed commits, tracked diffs, `.agent-ooo/` artifacts, and untracked files for leaked credentials before pushing.
 
 ## 3. Best practices for autonomous agents
 

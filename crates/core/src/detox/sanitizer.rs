@@ -151,6 +151,23 @@ pub fn mask_secret_preview(matched: &str) -> String {
     }
 }
 
+/// Scans a single line for secret matches, returning `(secret_type, masked_preview)` pairs
+/// (capped at 16 matches per line) without retaining raw secret material.
+pub fn scan_line_for_secrets(line: &str) -> Vec<(String, String)> {
+    if !has_secret_candidate(line.as_bytes()) {
+        return Vec::new();
+    }
+
+    SECRET_RE
+        .find_iter(line)
+        .take(16)
+        .map(|mat| {
+            let raw = mat.as_str();
+            (classify_secret(raw), mask_secret_preview(raw))
+        })
+        .collect()
+}
+
 /// Fast byte-slice pre-check for ANSI CSI/OSC escape sequences (`0x1B`).
 #[inline]
 pub fn has_ansi_candidate(bytes: &[u8]) -> bool {
@@ -446,5 +463,31 @@ mod tests {
         // Payload is {"role":"service_role","iss":"supabase"} -> eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UifQ
         let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UifQ.signature12345";
         assert_eq!(classify_secret(jwt), "jwt (role: service_role)");
+    }
+
+    #[test]
+    fn test_scan_line_for_secrets_masks_and_caps() {
+        assert!(scan_line_for_secrets("clean log line without credentials").is_empty());
+
+        let aws = concat!("AKIA", "ABCDEFGHIJKLMNOP");
+        let ant = concat!("sk-ant-", "api03-AbCdEfGhIjKlMnOpQrStUvWx");
+        let line = format!("aws={aws} ant={ant}");
+        let hits = scan_line_for_secrets(&line);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(
+            hits[0],
+            ("aws_access_key".to_string(), "AKIAABC...MNOP".to_string())
+        );
+        assert_eq!(
+            hits[1],
+            (
+                "anthropic_api_key".to_string(),
+                "sk-ant-...UvWx".to_string()
+            )
+        );
+
+        let repeated = std::iter::repeat_n(aws, 20).collect::<Vec<_>>().join(" ");
+        let capped = scan_line_for_secrets(&repeated);
+        assert_eq!(capped.len(), 16);
     }
 }

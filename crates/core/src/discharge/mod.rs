@@ -1,6 +1,7 @@
 //! Step 4: Discharge (Exit Exam & Spa Report)
 
 pub mod canary;
+pub mod gate;
 pub mod pipeline;
 pub mod report;
 

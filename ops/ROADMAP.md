@@ -22,7 +22,7 @@ All items are ranked by **user value x distribution leverage / complexity**. Aut
 
 - [x] **B1. Safe In-Place Transcript Scrubbing (`ooo detox --redact-in-place --backup`):**
   - Allow developers to purge leaked credentials from historical `.jsonl` logs on disk using atomic temp-file replacement + `.bak` backup verification.
-- [ ] **B2. Git Pre-Push Canary Gate (`ooo hook install`):**
+- [x] **B2. Git Pre-Push Canary Gate (`ooo hook install`):**
   - Optional 5 ms `.git/hooks/pre-push` gate that warns or blocks pushes when `Discharge` reports `FAIL` canaries or unredacted workspace secrets.
 - [ ] **B3. Schema Drift Doctor (`ooo checkin --doctor`):**
   - Diagnose unrecognized JSONL schemas or zero-tool-call anomalies across discovered harnesses so vendor format changes are caught immediately.
