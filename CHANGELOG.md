@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-25
+
 ### Added
 - **Cycle 6 (`B2`): Git Pre-Push Canary Gate (`ooo hook install`):**
   - Added `scan_line_for_secrets` in `crates/core/src/detox/sanitizer.rs` using the `has_secret_candidate` fast-path and `SECRET_RE` (capped at 16 matches per line) to emit `(secret_type, masked_preview)` pairs without retaining raw secret material.

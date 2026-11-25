@@ -1,8 +1,8 @@
 # Agent OOO Operational Status
 
 **Last updated:** 2026-11-25
-**Latest release:** `v0.2.0` (with Phase A `A0` through `A4` complete plus Phase B `B1` and `B2` on `main`)
-**Active sprint:** `v0.4.0` Phase B Active Remediation & CI Governance (Next up: Cycle 7 `B3` Schema Drift Doctor `ooo checkin --doctor`)
+**Latest release:** `v0.3.0` (shipped 2026-11-25, bundling Cycles `0` through `6`: `A0` to `A4`, `B1`, `B2`)
+**Active sprint:** `v0.4.0` Phase B Completion & Phase C Distribution (Next up: Cycle 7 `B3` Schema Drift Doctor `ooo checkin --doctor`)
 **Overall health:** Green (`70/70` tests passing, `0` clippy warnings, `43.78 ms` full spa latency, `28.21 ms` hook check latency, `14.06 MB` peak RSS)
 
 ## 1. Executive pulse

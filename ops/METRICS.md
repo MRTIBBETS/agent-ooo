@@ -24,4 +24,4 @@ Append one row per completed autonomous or interactive sprint cycle. Measure per
 | 2026-11-18 | `v0.2.0` | `20` | `4` | `1` | `0` | `0` | `7` + Turnkey Skill Bundle & Git Lifecycle Hooks |
 | 2026-11-20 | `v0.2.0` | `20` | `4` | `1` | `0` | `0` | `7` + Turnkey Skill Bundle, Git Hooks & Vitals Card |
 | 2026-11-23 | `v0.2.0` | `20` | `4` | `1` | `0` | `0` | `7` + Skill, Hooks, Vitals Card & In-Place Scrubbing |
-| 2026-11-25 | `v0.2.0` | `20` | `4` | `1` | `0` | `0` | `7` + Skill, Pre-Push Canary Gate, Vitals Card & In-Place Scrubbing |
+| 2026-11-25 | `v0.3.0` | `20` | `4` (`v0.2.0`) | `1` | `0` | `0` | `7` + `v0.3.0` tagged (Skill, Pre-Push Gate, Vitals Card, Scrubbing) |
