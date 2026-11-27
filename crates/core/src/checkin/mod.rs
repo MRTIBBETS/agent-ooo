@@ -1,6 +1,7 @@
 //! Step 1: Checkin (Intake, Discovery & Triage)
 
 pub mod discovery;
+pub mod doctor;
 pub mod parser;
 pub mod triage;
 

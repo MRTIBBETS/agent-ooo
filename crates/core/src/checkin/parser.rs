@@ -6,6 +6,93 @@ use std::path::Path;
 
 const MAX_TRACKED_TOOLS: usize = 64;
 const MAX_STORED_TOOL_CALLS: usize = 4096;
+const MAX_UNKNOWN_TOP_LEVEL_KEYS: usize = 24;
+const MAX_SUSPECTED_TOOL_KEYS: usize = 12;
+
+const SUSPECTED_TOOL_KEY_NAMES: &[&str] = &[
+    "tool",
+    "tools",
+    "function_call",
+    "functionCall",
+    "toolUse",
+    "tool_use",
+    "tool_executions",
+    "actions",
+    "invocations",
+    "calls",
+    "tool_input",
+];
+
+#[derive(Debug, Default, Clone)]
+pub struct ParseDiagnostics {
+    pub total_non_empty_lines: usize,
+    pub valid_json_lines: usize,
+    pub malformed_json_lines: usize,
+    pub sidechain_skipped_lines: usize,
+    pub recognized_role_turns: usize,
+    pub unknown_role_turns: usize,
+    pub unknown_top_level_keys: Vec<String>,
+    pub suspected_tool_keys: Vec<String>,
+}
+
+fn push_unique_bounded(target: &mut Vec<String>, key: &str, max_len: usize) {
+    if target.len() < max_len && !target.iter().any(|existing| existing == key) {
+        target.push(key.to_string());
+    }
+}
+
+fn collect_suspected_tool_keys(
+    value: &Value,
+    message: Option<&Value>,
+    diagnostics: &mut ParseDiagnostics,
+) {
+    if let Some(obj) = value.as_object() {
+        for key in obj.keys() {
+            if SUSPECTED_TOOL_KEY_NAMES.contains(&key.as_str()) {
+                push_unique_bounded(
+                    &mut diagnostics.suspected_tool_keys,
+                    key,
+                    MAX_SUSPECTED_TOOL_KEYS,
+                );
+            }
+        }
+    }
+    if let Some(msg_obj) = message.and_then(|m| m.as_object()) {
+        for key in msg_obj.keys() {
+            if SUSPECTED_TOOL_KEY_NAMES.contains(&key.as_str()) {
+                push_unique_bounded(
+                    &mut diagnostics.suspected_tool_keys,
+                    key,
+                    MAX_SUSPECTED_TOOL_KEYS,
+                );
+            }
+        }
+        if let Some(blocks) = msg_obj.get("content").and_then(|c| c.as_array()) {
+            for block in blocks {
+                if let Some(block_obj) = block.as_object() {
+                    for key in block_obj.keys() {
+                        if SUSPECTED_TOOL_KEY_NAMES.contains(&key.as_str()) {
+                            push_unique_bounded(
+                                &mut diagnostics.suspected_tool_keys,
+                                key,
+                                MAX_SUSPECTED_TOOL_KEYS,
+                            );
+                        }
+                    }
+                    if let Some(block_type) = block_obj.get("type").and_then(|t| t.as_str()) {
+                        if SUSPECTED_TOOL_KEY_NAMES.contains(&block_type) {
+                            push_unique_bounded(
+                                &mut diagnostics.suspected_tool_keys,
+                                block_type,
+                                MAX_SUSPECTED_TOOL_KEYS,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct TranscriptMetrics {
@@ -253,20 +340,38 @@ fn content_text_len(content: &Value) -> usize {
 /// Supports the Antigravity flat schema (`source`, `content`, `tool_calls`) and the
 /// Claude Code nested schema (`type`, `message.role`, `message.content[]`).
 pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics> {
+    let (metrics, _) = parse_transcript_with_diagnostics(path)?;
+    Ok(metrics)
+}
+
+/// Streams a JSONL transcript file using a reusable line buffer, returning both extracted
+/// metrics and schema diagnostics for the Schema Drift Doctor.
+pub fn parse_transcript_with_diagnostics<P: AsRef<Path>>(
+    path: P,
+) -> io::Result<(TranscriptMetrics, ParseDiagnostics)> {
     let target_path = crate::checkin::discovery::resolve_scan_target(path.as_ref());
     let file = File::open(target_path)?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
 
     let mut metrics = TranscriptMetrics::default();
+    let mut diagnostics = ParseDiagnostics::default();
+    let mut line = String::new();
 
-    for line in reader.lines() {
-        let line = line?;
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
         if line.trim().is_empty() {
             continue;
         }
+        diagnostics.total_non_empty_lines += 1;
 
         if let Ok(value) = serde_json::from_str::<Value>(&line) {
+            diagnostics.valid_json_lines += 1;
+
             if value.get("isSidechain").and_then(|v| v.as_bool()) == Some(true) {
+                diagnostics.sidechain_skipped_lines += 1;
                 continue;
             }
 
@@ -392,6 +497,12 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
                 metrics.api_usage_turns += 1;
             }
 
+            let is_unknown_role = role == "UNKNOWN";
+            let is_recognized_role = is_user_role
+                || is_assistant_role
+                || is_antigravity_tool_result
+                || matches!(role.as_str(), "SYSTEM" | "SYSTEM_MESSAGE" | "TOOL");
+
             *metrics.role_distribution.entry(role).or_insert(0) += 1;
 
             // Track top-level thinking and assistant output bytes (Antigravity schema)
@@ -409,6 +520,7 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
             }
 
             let mut tool_args_bytes = 0usize;
+            let mut turn_tool_calls = 0usize;
 
             // Extract tool call signatures
             // Check Antigravity format `tool_calls`
@@ -430,11 +542,13 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
                         .and_then(|v| v.as_str())
                     {
                         record_tool_call(&mut metrics, tool_name, &args_str);
+                        turn_tool_calls += 1;
                     } else if let Some(function) =
                         tool_call.get("function").and_then(|v| v.as_object())
                     {
                         if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
                             record_tool_call(&mut metrics, name, &args_str);
+                            turn_tool_calls += 1;
                         }
                     }
                 }
@@ -472,6 +586,7 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
                                 metrics.output_bytes += args_str.len();
                                 if let Some(name) = block.get("name").and_then(|v| v.as_str()) {
                                     record_tool_call(&mut metrics, name, &args_str);
+                                    turn_tool_calls += 1;
                                 }
                             }
                             "tool_result" => {
@@ -495,6 +610,27 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
                 }
             }
 
+            if is_recognized_role || turn_tool_calls > 0 {
+                diagnostics.recognized_role_turns += 1;
+            }
+            if is_unknown_role {
+                diagnostics.unknown_role_turns += 1;
+            }
+            if is_unknown_role || (!is_recognized_role && turn_tool_calls == 0) {
+                if let Some(obj) = value.as_object() {
+                    for key in obj.keys() {
+                        push_unique_bounded(
+                            &mut diagnostics.unknown_top_level_keys,
+                            key,
+                            MAX_UNKNOWN_TOP_LEVEL_KEYS,
+                        );
+                    }
+                }
+            }
+            if turn_tool_calls == 0 {
+                collect_suspected_tool_keys(&value, message, &mut diagnostics);
+            }
+
             // Naive token estimation: characters / 4
             let content_len = match value.get("content").and_then(|v| v.as_str()) {
                 Some(content) => content.len() + top_thinking_len + tool_args_bytes,
@@ -509,11 +645,12 @@ pub fn parse_transcript<P: AsRef<Path>>(path: P) -> io::Result<TranscriptMetrics
             };
             metrics.total_input_tokens += content_len / 4;
         } else {
+            diagnostics.malformed_json_lines += 1;
             metrics.total_turns += 1;
         }
     }
 
-    Ok(metrics)
+    Ok((metrics, diagnostics))
 }
 
 #[cfg(test)]

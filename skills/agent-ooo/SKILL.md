@@ -25,6 +25,7 @@ What it returns:
 * **Guest condition and rot index:** Computes a multi-factor degradation score from 0.0 to 10.0 across 4 wellness tiers (`Elite`, `Fit`, `Fair`, `Fatigued`).
 * **Cognitive loop lock detection:** Flags identical consecutive `(tool_name, arguments)` intent signatures repeating 3 or more times.
 * **Token and spend ledger:** Reports exact API input, cache read, and output tokens alongside an estimated session cost in USD.
+* **Schema Drift Doctor (`--doctor` / MCP `doctor: true`):** Audits transcript parsing coverage across all 7 harnesses (or a single transcript) to diagnose unrecognized JSONL schemas, suspected unrecognized tool keys, malformed lines, or missing token/model telemetry.
 
 ```bash
 # Triage the most recent active session
@@ -32,6 +33,10 @@ ooo checkin
 
 # Render a compact, screenshot-ready ANSI terminal vitals card
 ooo checkin --card
+
+# Run Schema Drift Doctor across all 7 harnesses (or a single transcript)
+ooo checkin --doctor
+ooo checkin /path/to/transcript.jsonl --doctor
 
 # Non-interactive triage (skips interactive picker)
 ooo -y checkin

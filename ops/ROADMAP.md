@@ -24,7 +24,7 @@ All items are ranked by **user value x distribution leverage / complexity**. Aut
   - Allow developers to purge leaked credentials from historical `.jsonl` logs on disk using atomic temp-file replacement + `.bak` backup verification.
 - [x] **B2. Git Pre-Push Canary Gate (`ooo hook install`):**
   - Optional 5 ms `.git/hooks/pre-push` gate that warns or blocks pushes when `Discharge` reports `FAIL` canaries or unredacted workspace secrets.
-- [ ] **B3. Schema Drift Doctor (`ooo checkin --doctor`):**
+- [x] **B3. Schema Drift Doctor (`ooo checkin --doctor`):**
   - Diagnose unrecognized JSONL schemas, missing token/tool telemetry, or zero-tool-call anomalies across all 7 discovered harnesses (CLI `--doctor` + MCP `doctor: true`) so upstream vendor format changes are caught immediately.
 
 ## Phase C: Distribution, CI gate, & fleet observability (`v0.3.x` -> `v0.4.0`)

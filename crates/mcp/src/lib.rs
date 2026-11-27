@@ -1,4 +1,4 @@
-use agent_ooo_core::checkin::{discovery, parser, triage};
+use agent_ooo_core::checkin::{discovery, doctor, parser, triage};
 use agent_ooo_core::detox::{exporter, pipeline as detox_pipeline, sanitizer};
 use agent_ooo_core::discharge::pipeline as discharge_pipeline;
 use agent_ooo_core::reset::{pipeline as reset_pipeline, serializer};
@@ -147,6 +147,10 @@ fn tool_definitions() -> Value {
                     "limit": {
                         "type": "integer",
                         "description": "Maximum number of sessions to return when list_sessions is true (default: 10)."
+                    },
+                    "doctor": {
+                        "type": "boolean",
+                        "description": "When true, runs the Schema Drift Doctor across all 7 discovered harnesses (or the specified transcript) to diagnose unrecognized JSONL schemas, missing token/tool telemetry, or zero-tool-call anomalies."
                     }
                 },
                 "additionalProperties": false
@@ -306,6 +310,24 @@ fn handle_tool_call(id: Value, params: &Value) -> Value {
 }
 
 fn execute_checkin(args: &Value) -> anyhow::Result<Value> {
+    let doctor_mode = args
+        .get("doctor")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if doctor_mode {
+        if let Some(explicit_transcript) = args.get("transcript").and_then(|v| v.as_str()) {
+            let path = discovery::resolve_transcript_non_interactive(Some(explicit_transcript))
+                .map_err(|e| anyhow::anyhow!(e))?;
+            return Ok(serde_json::to_value(doctor::diagnose_single_to_report(
+                &path,
+            ))?);
+        }
+        return Ok(serde_json::to_value(
+            doctor::diagnose_discovered_transcripts(),
+        )?);
+    }
+
     let list_sessions = args
         .get("list_sessions")
         .and_then(|v| v.as_bool())
@@ -662,5 +684,70 @@ mod tests {
         let exported_payload = export_json["exported"].as_str().unwrap();
         assert!(exported_payload.contains("[REDACTED_SECRET]"));
         assert!(!exported_payload.contains("sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx"));
+    }
+
+    #[test]
+    fn checkin_doctor_schema_and_drifted_transcript_report() {
+        let list_resp =
+            handle_jsonrpc_message(r#"{"jsonrpc":"2.0","id":20,"method":"tools/list"}"#).unwrap();
+        let tools = list_resp["result"]["tools"].as_array().unwrap();
+        let checkin_tool = tools.iter().find(|t| t["name"] == "checkin").unwrap();
+        assert!(checkin_tool["inputSchema"]["properties"]["doctor"].is_object());
+        assert_eq!(
+            checkin_tool["inputSchema"]["properties"]["doctor"]["type"],
+            "boolean"
+        );
+
+        let dir = TempDir::new().unwrap();
+        let drifted = dir.path().join("drifted.jsonl");
+        std::fs::write(
+            &drifted,
+            concat!(
+                r#"{"kind":"turn","actor":"human","body":"hello"}"#,
+                "\n",
+                r#"{"kind":"turn","actor":"bot","body":"hi"}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let doctor_req = json!({
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": {
+                "name": "checkin",
+                "arguments": {
+                    "transcript": drifted.to_string_lossy(),
+                    "doctor": true
+                }
+            }
+        });
+        let doctor_resp = handle_jsonrpc_message(&doctor_req.to_string()).unwrap();
+        assert_eq!(doctor_resp["result"]["isError"], false);
+        let report_text = doctor_resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        let report_json: Value = serde_json::from_str(report_text).unwrap();
+        assert_eq!(report_json["overall_status"], "Fail");
+        assert_eq!(report_json["sessions_checked"], 1);
+        assert_eq!(report_json["fail_count"], 1);
+        let findings = report_json["sessions"][0]["findings"].as_array().unwrap();
+        assert!(findings.iter().any(|f| f["code"] == "unrecognized_schema"));
+
+        let missing_req = json!({
+            "jsonrpc": "2.0",
+            "id": 22,
+            "method": "tools/call",
+            "params": {
+                "name": "checkin",
+                "arguments": {
+                    "transcript": dir.path().join("missing.jsonl").to_string_lossy(),
+                    "doctor": true
+                }
+            }
+        });
+        let missing_resp = handle_jsonrpc_message(&missing_req.to_string()).unwrap();
+        assert_eq!(missing_resp["result"]["isError"], true);
     }
 }

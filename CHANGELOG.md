@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+- **Cycle 7 (`B3`): Schema Drift Doctor (`ooo checkin --doctor` & MCP `doctor: true`):**
+  - Refactored `parse_transcript` in `crates/core/src/checkin/parser.rs` to delegate to `parse_transcript_with_diagnostics` using a reusable `String` buffer via `BufReader::read_line`. Added `ParseDiagnostics` tracking `total_non_empty_lines`, `valid_json_lines`, `malformed_json_lines`, `sidechain_skipped_lines`, `recognized_role_turns`, `unknown_role_turns`, bounded `unknown_top_level_keys` (max 24), and bounded `suspected_tool_keys` (max 12) for unrecognized tool fields (`function_call`, `functionCall`, `toolUse`, `tool_use`, `tool_executions`, `actions`, `invocations`, `calls`, `tool_input`).
+  - Added `crates/core/src/checkin/doctor.rs` (exported via `pub mod doctor;` in `crates/core/src/checkin/mod.rs`) implementing `SUPPORTED_HARNESSES`, `DoctorSeverity` (`Pass`, `Warn`, `Fail`), `DoctorFinding`, `SessionDoctorResult`, `HarnessDoctorSummary`, `DoctorReport`, `diagnose_transcript`, `diagnose_single_to_report`, `diagnose_candidates`, and `diagnose_discovered_transcripts` (bounded to 200 recent sessions). Diagnoses unreadable files, empty transcripts, malformed JSONL ratios, unrecognized schemas (with sample top-level keys), zero-tool-call anomalies (flagging suspected unrecognized tool keys), missing API or estimable token telemetry, and missing model IDs across all 7 supported harnesses.
+  - Added `--doctor` to `Commands::Checkin` in `crates/cli/src/lib.rs` with `validate_checkin_flags` (rejecting `--card` + `--doctor` together) and `print_doctor_report` rendering 7-harness coverage and up to 20 non-`PASS` session diagnostics.
+  - Added `"doctor": boolean` to the `checkin` tool schema and `execute_checkin` dispatch in `crates/mcp/src/lib.rs` for both explicit `transcript` targets and host-wide discovery.
+  - Added 8 new tests across `crates/core/src/checkin/doctor.rs` (`6`), `crates/cli/src/lib.rs` (`1`), and `crates/mcp/src/lib.rs` (`1`), bringing total workspace tests to `78/78`, and synced `README.md`, `llms.txt`, and `skills/agent-ooo/SKILL.md`.
+  - *Self-Review Fix:* Added `recognized_role_turns` to `ParseDiagnostics` (`crates/core/src/checkin/parser.rs`) and wired it to `SessionDoctorResult.recognized_turns` (`crates/core/src/checkin/doctor.rs`) so valid JSON lines with unrecognized non-`UNKNOWN` event `type` keys are not counted as recognized turns.
+  - *Context:* Authored by Antigravity Tier-2 Subagent (Gemini 3.8 Flash) and reviewed by Coordinator using Rust 1.99.1 and Cap'n Proto 1.5.0.
+
 ## [0.3.0] - 2026-11-25
 
 ### Added

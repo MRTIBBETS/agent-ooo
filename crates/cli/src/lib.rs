@@ -2,7 +2,7 @@ pub mod banner;
 pub mod card;
 pub mod hook;
 
-use agent_ooo_core::checkin::{discovery, parser, triage};
+use agent_ooo_core::checkin::{discovery, doctor, parser, triage};
 use agent_ooo_core::detox::pipeline as detox_pipeline;
 use agent_ooo_core::discharge::pipeline as discharge_pipeline;
 use agent_ooo_core::reset::pipeline as reset_pipeline;
@@ -41,6 +41,9 @@ pub enum Commands {
         /// Render a compact, screenshot-ready ANSI terminal vitals card
         #[arg(long)]
         card: bool,
+        /// Run the Schema Drift Doctor across all 7 discovered harnesses (or a single transcript)
+        #[arg(long)]
+        doctor: bool,
     },
     /// Step 2: Strip ANSI noise, mask secrets, and offload massive payloads.
     #[command(display_order = 3)]
@@ -140,47 +143,64 @@ pub fn run() -> anyhow::Result<()> {
     }
 
     match &cli.command {
-        Some(Commands::Checkin { transcript, card }) => {
-            if !*card {
+        Some(Commands::Checkin {
+            transcript,
+            card,
+            doctor,
+        }) => {
+            validate_checkin_flags(*card, *doctor)?;
+            if *doctor {
                 println!(
-                    "{} Admitting session for checkin triage...",
-                    "[CHECKIN]".bold().green()
+                    "{} Running Schema Drift Doctor...",
+                    "[CHECKIN DOCTOR]".bold().green()
                 );
-            }
-            let path =
-                discovery::resolve_transcript_path_with_mode(transcript.as_deref(), cli.latest)
-                    .map_err(|e| anyhow::anyhow!(e))?;
-            let metrics = parser::parse_transcript(&path)?;
-            let receipt = triage::calculate_triage(&path, metrics);
-            if *card {
-                let scan = agent_ooo_core::detox::sanitizer::scan_transcript_secrets(&path)?;
-                println!("{}", card::render_vitals_card(&receipt, &scan));
+                let report = match transcript.as_deref() {
+                    Some(path) => doctor::diagnose_single_to_report(std::path::Path::new(path)),
+                    None => doctor::diagnose_discovered_transcripts(),
+                };
+                print_doctor_report(&report);
             } else {
-                println!("Session ID: {}", receipt.session_id);
-                println!(
-                    "Guest Condition: {} | Rot Index: {:.2}/10.0",
-                    receipt.condition.as_str().bold(),
-                    receipt.degradation_score
-                );
-                println!(
-                    "Harness: {} ({}) | Turns: {} | Tool Calls: {} ({} failed)",
-                    receipt.vitals.agent_harness,
-                    receipt.vitals.model_id,
-                    receipt.vitals.total_turns,
-                    receipt.vitals.total_tool_calls,
-                    receipt.vitals.failed_tool_calls
-                );
-                if receipt.vitals.api_input_tokens > 0
-                    || receipt.vitals.api_cache_read_tokens > 0
-                    || receipt.vitals.api_output_tokens > 0
-                {
+                if !*card {
                     println!(
-                        "API Ledger: {} in | {} cache_read | {} out (~${:.4} est. session spend)",
-                        receipt.vitals.api_input_tokens,
-                        receipt.vitals.api_cache_read_tokens,
-                        receipt.vitals.api_output_tokens,
-                        receipt.vitals.estimated_session_cost_usd
+                        "{} Admitting session for checkin triage...",
+                        "[CHECKIN]".bold().green()
                     );
+                }
+                let path =
+                    discovery::resolve_transcript_path_with_mode(transcript.as_deref(), cli.latest)
+                        .map_err(|e| anyhow::anyhow!(e))?;
+                let metrics = parser::parse_transcript(&path)?;
+                let receipt = triage::calculate_triage(&path, metrics);
+                if *card {
+                    let scan = agent_ooo_core::detox::sanitizer::scan_transcript_secrets(&path)?;
+                    println!("{}", card::render_vitals_card(&receipt, &scan));
+                } else {
+                    println!("Session ID: {}", receipt.session_id);
+                    println!(
+                        "Guest Condition: {} | Rot Index: {:.2}/10.0",
+                        receipt.condition.as_str().bold(),
+                        receipt.degradation_score
+                    );
+                    println!(
+                        "Harness: {} ({}) | Turns: {} | Tool Calls: {} ({} failed)",
+                        receipt.vitals.agent_harness,
+                        receipt.vitals.model_id,
+                        receipt.vitals.total_turns,
+                        receipt.vitals.total_tool_calls,
+                        receipt.vitals.failed_tool_calls
+                    );
+                    if receipt.vitals.api_input_tokens > 0
+                        || receipt.vitals.api_cache_read_tokens > 0
+                        || receipt.vitals.api_output_tokens > 0
+                    {
+                        println!(
+                            "API Ledger: {} in | {} cache_read | {} out (~${:.4} est. session spend)",
+                            receipt.vitals.api_input_tokens,
+                            receipt.vitals.api_cache_read_tokens,
+                            receipt.vitals.api_output_tokens,
+                            receipt.vitals.estimated_session_cost_usd
+                        );
+                    }
                 }
             }
         }
@@ -591,6 +611,133 @@ pub fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn validate_checkin_flags(card: bool, doctor: bool) -> anyhow::Result<()> {
+    if card && doctor {
+        anyhow::bail!("--card and --doctor cannot be used together");
+    }
+    Ok(())
+}
+
+fn format_severity_badge(severity: doctor::DoctorSeverity) -> colored::ColoredString {
+    match severity {
+        doctor::DoctorSeverity::Pass => "[PASS]".green().bold(),
+        doctor::DoctorSeverity::Warn => "[WARN]".yellow().bold(),
+        doctor::DoctorSeverity::Fail => "[FAIL]".red().bold(),
+    }
+}
+
+fn print_doctor_report(report: &doctor::DoctorReport) {
+    const MAX_RENDERED_SESSIONS: usize = 20;
+
+    let overall_colored = match report.overall_status {
+        doctor::DoctorSeverity::Pass => report.overall_status.as_str().green().bold(),
+        doctor::DoctorSeverity::Warn => report.overall_status.as_str().yellow().bold(),
+        doctor::DoctorSeverity::Fail => report.overall_status.as_str().red().bold(),
+    };
+    println!(
+        "Overall Status: {} | Sessions Checked: {} | Pass: {} | Warn: {} | Fail: {}",
+        overall_colored,
+        report.sessions_checked,
+        report.pass_count,
+        report.warn_count,
+        report.fail_count
+    );
+
+    println!("\nHarness Coverage (7 supported):");
+    for harness in doctor::SUPPORTED_HARNESSES {
+        if let Some(summary) = report
+            .harness_summaries
+            .iter()
+            .find(|s| s.agent_harness == harness)
+        {
+            println!(
+                "  {} {:<16} {:>3} session(s) (pass: {}, warn: {}, fail: {})",
+                format_severity_badge(summary.status),
+                summary.agent_harness,
+                summary.sessions_checked,
+                summary.pass_count,
+                summary.warn_count,
+                summary.fail_count
+            );
+        } else {
+            println!("  {} {:<16} none on host", "[----]".dimmed(), harness);
+        }
+    }
+
+    for summary in report
+        .harness_summaries
+        .iter()
+        .filter(|s| !doctor::SUPPORTED_HARNESSES.contains(&s.agent_harness.as_str()))
+    {
+        println!(
+            "  {} {:<16} {:>3} session(s) (pass: {}, warn: {}, fail: {})",
+            format_severity_badge(summary.status),
+            summary.agent_harness,
+            summary.sessions_checked,
+            summary.pass_count,
+            summary.warn_count,
+            summary.fail_count
+        );
+    }
+
+    let non_pass: Vec<&doctor::SessionDoctorResult> = report
+        .sessions
+        .iter()
+        .filter(|s| s.status != doctor::DoctorSeverity::Pass)
+        .collect();
+
+    if non_pass.is_empty() {
+        if report.sessions_checked == 0 {
+            println!(
+                "\n{}",
+                "No transcripts discovered across local agent harnesses.".yellow()
+            );
+        } else {
+            println!(
+                "\n{}",
+                "Clean bill of health: all checked sessions passed schema and telemetry checks."
+                    .green()
+                    .bold()
+            );
+        }
+        return;
+    }
+
+    println!("\nNon-PASS Session Diagnostics:");
+    for session in non_pass.iter().take(MAX_RENDERED_SESSIONS) {
+        println!(
+            "\n{} {} ({}) [lines: {}, valid: {}, malformed: {}, tools: {}, api_usage_turns: {}]",
+            format_severity_badge(session.status),
+            session.session_id.bold(),
+            session.agent_harness,
+            session.total_lines,
+            session.valid_json_lines,
+            session.malformed_json_lines,
+            session.total_tool_calls,
+            session.api_usage_turns
+        );
+        println!("  Path: {}", session.transcript_path);
+        for finding in &session.findings {
+            println!(
+                "  * {} {}: {}",
+                format_severity_badge(finding.severity),
+                finding.code.bold(),
+                finding.message
+            );
+            if !finding.sample_keys.is_empty() {
+                println!("    sample_keys: {}", finding.sample_keys.join(", "));
+            }
+        }
+    }
+
+    if non_pass.len() > MAX_RENDERED_SESSIONS {
+        println!(
+            "\n... {} more non-PASS session(s) omitted (run MCP checkin with doctor: true for full JSON).",
+            non_pass.len() - MAX_RENDERED_SESSIONS
+        );
+    }
+}
+
 fn validate_detox_flags(redact_in_place: bool, backup: bool) -> anyhow::Result<()> {
     if backup && !redact_in_place {
         anyhow::bail!("--backup requires --redact-in-place");
@@ -832,9 +979,14 @@ mod tests {
     fn test_cli_checkin_card_flag_parsing() {
         let cli_default = Cli::try_parse_from(["ooo", "checkin"]).expect("parse checkin");
         match cli_default.command {
-            Some(Commands::Checkin { transcript, card }) => {
+            Some(Commands::Checkin {
+                transcript,
+                card,
+                doctor,
+            }) => {
                 assert_eq!(transcript, None);
                 assert!(!card);
+                assert!(!doctor);
             }
             _ => panic!("Expected Commands::Checkin"),
         }
@@ -842,9 +994,14 @@ mod tests {
         let cli_card =
             Cli::try_parse_from(["ooo", "checkin", "--card"]).expect("parse checkin --card");
         match cli_card.command {
-            Some(Commands::Checkin { transcript, card }) => {
+            Some(Commands::Checkin {
+                transcript,
+                card,
+                doctor,
+            }) => {
                 assert_eq!(transcript, None);
                 assert!(card);
+                assert!(!doctor);
             }
             _ => panic!("Expected Commands::Checkin"),
         }
@@ -852,12 +1009,58 @@ mod tests {
         let cli_card_path = Cli::try_parse_from(["ooo", "checkin", "session.jsonl", "--card"])
             .expect("parse checkin path --card");
         match cli_card_path.command {
-            Some(Commands::Checkin { transcript, card }) => {
+            Some(Commands::Checkin {
+                transcript,
+                card,
+                doctor,
+            }) => {
                 assert_eq!(transcript, Some("session.jsonl".to_string()));
                 assert!(card);
+                assert!(!doctor);
             }
             _ => panic!("Expected Commands::Checkin"),
         }
+    }
+
+    #[test]
+    fn test_cli_checkin_doctor_flag_parsing() {
+        let cli_doctor =
+            Cli::try_parse_from(["ooo", "checkin", "--doctor"]).expect("parse checkin --doctor");
+        match cli_doctor.command {
+            Some(Commands::Checkin {
+                transcript,
+                card,
+                doctor,
+            }) => {
+                assert_eq!(transcript, None);
+                assert!(!card);
+                assert!(doctor);
+            }
+            _ => panic!("Expected Commands::Checkin"),
+        }
+
+        let cli_doctor_path = Cli::try_parse_from(["ooo", "checkin", "path.jsonl", "--doctor"])
+            .expect("parse checkin path.jsonl --doctor");
+        match cli_doctor_path.command {
+            Some(Commands::Checkin {
+                transcript,
+                card,
+                doctor,
+            }) => {
+                assert_eq!(transcript, Some("path.jsonl".to_string()));
+                assert!(!card);
+                assert!(doctor);
+            }
+            _ => panic!("Expected Commands::Checkin"),
+        }
+
+        assert!(validate_checkin_flags(false, false).is_ok());
+        assert!(validate_checkin_flags(true, false).is_ok());
+        assert!(validate_checkin_flags(false, true).is_ok());
+        let err = validate_checkin_flags(true, true).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("--card and --doctor cannot be used together"));
     }
 
     #[test]
